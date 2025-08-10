@@ -1,0 +1,77 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    ports:
+      - "6333:6333"
+      - "6334:6334"  # gRPC port
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: "INFO"
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - crawlerr-network
+
+  text-embeddings-inference:
+    image: ghcr.io/huggingface/text-embeddings-inference:89-latest # Specific image for RTX 40xx series
+    ports:
+      - "8080:80"
+    volumes:
+      - tei_data:/data
+    command:
+      - --model-id
+      - Qwen/Qwen3-Embedding-0.6B
+      - --dtype
+      - float16
+      # Performance optimizations
+      - --max-concurrent-requests
+      - "128"  # Increased from default 512 to handle more concurrent requests
+      - --max-batch-tokens
+      - "32768"  # Increased from default 16384 for better GPU utilization
+      - --max-batch-requests
+      - "64"  # Limit individual requests in a batch
+      - --max-client-batch-size
+      - "128"  # Increased from default 32 for larger batches
+      - --tokenization-workers
+      - "16"  # Optimize tokenization with more workers
+      - --auto-truncate  # Automatically truncate long inputs
+      # For modern GPUs like the RTX 4070, Flash Attention is often
+      # automatically enabled in the underlying libraries (PyTorch 2+).
+      # The latest TEI image includes these libraries. Explicitly setting a 
+      # flash attention flag is often not required and can cause issues if incorrect.
+    environment:
+      # Additional performance tuning
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - HF_HUB_CACHE=/data/cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - crawlerr-network
+
+volumes:
+  tei_data:
+  qdrant_data:
+
+networks:
+  crawlerr-network:
+    driver: bridge

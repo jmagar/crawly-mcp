@@ -1,0 +1,102 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "MultiEdit",
+      "Write",
+      "NotebookEdit",
+      "Task",
+      "WebFetch",
+      "WebSearch",
+      "Read",
+      "Grep",
+      "Glob",
+      "LS",
+      "NotebookRead",
+      "TodoWrite",
+      "mcp__github-chat",
+      "mcp__searxng",
+      "mcp__gemini-coding",
+      "mcp__sequential-thinking",
+      "mcp__mcp-deepwiki",
+      "mcp__youtube-vision",
+      "mcp__deep-directory-tree",
+      "mcp__github",
+      "mcp__prompt-kit",
+      "mcp__context7",
+      "mcp__tailscale",
+      "mcp__gotify-mcp",
+      "mcp__playwright",
+      "mcp__favicon-generator",
+      "mcp__infra",
+      "mcp__unifi",
+      "mcp__syslog",
+      "mcp__unraid"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *.py ]]; then uv run black \"$file_path\"; fi; }"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *.py ]]; then uv run mypy \"$file_path\"; fi; }"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == \"pyproject.toml\" ]]; then uv sync; elif [[ \"$file_path\" == \"package.json\" ]]; then npm install; fi; }"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file_path=$(jq -r '.tool_input.file_path'); size=$(wc -c < \"$file_path\" 2>/dev/null || echo 0); if [ $size -gt 1000000 ]; then echo \"Warning: Created large file ($size bytes): $file_path\" >&2; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command_to_run=$(jq -r '.tool_input.command'); if [[ \"$command_to_run\" == \"git commit\"* ]]; then uv run ruff check . || exit 2; fi"
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' | grep -E '(rm -rf|sudo rm|mkfs|dd if=|:(){|fork|killall)' && echo 'Dangerous command blocked' >&2 && exit 2 || exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tool_name=$(jq -r '.tool_name'); echo \"[$(date)] MCP Tool: $tool_name\" >> \"$CLAUDE_PROJECT_DIR/.claude/mcp_usage.log\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"Current git branch: $(git branch --show-current 2>/dev/null || echo 'not a git repo')\" && echo \"Modified files: $(git status --porcelain 2>/dev/null | wc -l || echo '0') files\" && echo \"Current time: $(date)\""
+          }
+        ]
+      }
+    ]
+  }
+}

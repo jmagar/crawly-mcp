@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crawlerr"
+version = "0.1.0"
+description = "FastMCP RAG-enabled web crawling MCP server with Crawl4AI and Qdrant"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.11"
+dependencies = [
+    # FastMCP 2.0 server framework
+    "fastmcp>=2.0.0",
+    # Web crawling and scraping
+    "crawl4ai>=0.7.0",
+    "httpx>=0.25.0",
+    # Vector database
+    "qdrant-client>=1.7.0",
+    # Data processing
+    "pydantic>=2.5.0",
+    # Logging and monitoring
+    "structlog>=23.2.0",
+    "rich>=13.7.0",
+    # Environment and configuration
+    "python-dotenv>=1.0.0",
+    # System monitoring (optional but recommended)
+    "psutil>=5.9.0",
+    # Git repository operations
+    "gitpython>=3.1.40",
+    # Document parsing
+    "pypdf2>=3.0.1",
+    "python-docx>=1.1.0",
+    "chardet>=5.2.0",
+    "pydantic-settings>=2.10.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.7.0",
+    "pre-commit>=3.5.0",
+]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+    "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+crawlerr = "crawlerr.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

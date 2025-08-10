@@ -1,0 +1,37 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512' viewBox='0 0 512 512'>
+  <defs>
+    <linearGradient id='grad' x1='0%' y1='0%' x2='100%' y2='100%'>
+      <stop offset='0%' style='stop-color:#667eea;stop-opacity:1' />
+      <stop offset='100%' style='stop-color:#764ba2;stop-opacity:1' />
+    </linearGradient>
+  </defs>
+  <rect width='512' height='512' rx='64' fill='url(#grad)'/>
+  <g transform='translate(128,128)'>
+    <!-- Spider body -->
+    <ellipse cx='128' cy='128' rx='48' ry='32' fill='#ffffff' opacity='0.9'/>
+    <!-- Spider head -->
+    <circle cx='128' cy='96' r='20' fill='#ffffff' opacity='0.9'/>
+    <!-- Eyes -->
+    <circle cx='120' cy='90' r='4' fill='#333'/>
+    <circle cx='136' cy='90' r='4' fill='#333'/>
+    <!-- Legs -->
+    <path d='M96 120 L64 96 L48 108' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M96 136 L64 136 L48 148' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M160 120 L192 96 L208 108' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M160 136 L192 136 L208 148' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M88 144 L56 168 L40 180' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M168 144 L200 168 L216 180' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M88 112 L56 88 L40 76' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <path d='M168 112 L200 88 L216 76' stroke='#ffffff' stroke-width='4' fill='none' opacity='0.8'/>
+    <!-- Web pattern -->
+    <path d='M64 64 L192 64' stroke='#ffffff' stroke-width='2' opacity='0.4'/>
+    <path d='M48 96 L208 96' stroke='#ffffff' stroke-width='2' opacity='0.4'/>
+    <path d='M48 128 L208 128' stroke='#ffffff' stroke-width='2' opacity='0.4'/>
+    <path d='M48 160 L208 160' stroke='#ffffff' stroke-width='2' opacity='0.4'/>
+    <path d='M64 192 L192 192' stroke='#ffffff' stroke-width='2' opacity='0.4'/>
+    <!-- Vertical web lines -->
+    <path d='M80 64 L80 192' stroke='#ffffff' stroke-width='2' opacity='0.3'/>
+    <path d='M128 64 L128 192' stroke='#ffffff' stroke-width='2' opacity='0.3'/>
+    <path d='M176 64 L176 192' stroke='#ffffff' stroke-width='2' opacity='0.3'/>
+  </g>
+</svg>

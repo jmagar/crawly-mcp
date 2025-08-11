@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 from fastmcp import FastMCP, Context
 from fastmcp.exceptions import ToolError
 from ..services import CrawlerService, RagService, SourceService
-from ..models.crawl_models import CrawlRequest
+from ..models.crawl_models import CrawlRequest, CrawlStatus
 from ..models.source_models import SourceType
 from ..middleware.progress_middleware import progress_middleware
 
@@ -194,7 +194,7 @@ def register_crawling_tools(mcp: FastMCP):
             raise ToolError("max_depth cannot exceed 5")
         
         # Create progress tracker
-        # progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(url)}")
+        progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(url)}")
         
         try:
             # Initialize crawler service
@@ -239,7 +239,7 @@ def register_crawling_tools(mcp: FastMCP):
             await ctx.info(f"Crawl result status: {crawl_result.status} (type: {type(crawl_result.status)})")
             await ctx.info(f"Pages found: {len(crawl_result.pages)}")
             
-            if crawl_result.status != "completed":
+            if crawl_result.status != CrawlStatus.COMPLETED:
                 raise ToolError(f"Crawl failed: {', '.join(crawl_result.errors)}")
             
             # Prepare response with advanced features information
@@ -322,8 +322,7 @@ def register_crawling_tools(mcp: FastMCP):
             raise ToolError(error_msg)
         
         finally:
-            pass
-            # progress_middleware.remove_tracker(progress_tracker.operation_id)
+            progress_middleware.remove_tracker(progress_tracker.operation_id)
     
     @mcp.tool
     async def crawl_repo(

@@ -11,7 +11,8 @@ A production-ready MCP server that combines:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -26,12 +27,12 @@ from .config import settings
 __all__ = ["get_main", "get_mcp", "settings"]
 
 # Lazy imports to prevent conflicts when running server module directly
-def get_mcp() -> "FastMCP":
+def get_mcp() -> FastMCP:
     """Get the FastMCP server instance."""
     from .server import mcp
     return mcp
 
-def get_main() -> "Callable[[], None]":
+def get_main() -> Callable[[], None]:
     """Get the main CLI entry point function."""
     from .server import main  
     return main

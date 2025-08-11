@@ -19,7 +19,7 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy, CosineStrategy, JsonCssExtractionStrategy
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai import VirtualScrollConfig
-from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, DFSDeepCrawlStrategy
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
 from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter, DomainFilter, ContentTypeFilter
 from ..config import settings
 from ..models.crawl_models import (
@@ -600,45 +600,10 @@ class CrawlerService:
             
             # URL pattern filter to exclude invalid patterns
             URLPatternFilter(
-                patterns=[
-                    # Exclude navigation placeholders and invalid endpoints
-                    "*/internal*",
-                    "*/external*", 
-                    "*/api/*",
-                    "*/admin/*",
-                    "*/login*",
-                    "*/logout*",
-                    "*/register*",
-                    "*/auth/*",
-                    "*/private/*",
-                    "*/secure/*",
-                    
-                    # Exclude assets and media
-                    "*.css",
-                    "*.js",
-                    "*.jpg",
-                    "*.jpeg",
-                    "*.png",
-                    "*.gif",
-                    "*.svg",
-                    "*.ico",
-                    "*.pdf",
-                    "*.zip",
-                    "*.xml",
-                    "*.json",
-                    
-                    # Exclude common non-content pages
-                    "*/search*",
-                    "*/contact*",
-                    "*/privacy*",
-                    "*/terms*",
-                    "*/cookie*",
-                    "*/rss*",
-                    "*/feed*",
-                    
-                    # Exclude fragment-only or query-only URLs
-                    "*#*",
-                    "*?only*"
+                patterns=settings.crawl_exclude_url_patterns + [
+                    # File extensions are always excluded
+                    "*.css", "*.js", "*.jpg", "*.jpeg", "*.png", "*.gif", 
+                    "*.svg", "*.ico", "*.pdf", "*.zip", "*.xml", "*.json"
                 ],
                 reverse=True,  # Exclude matching patterns
                 use_glob=True
@@ -677,7 +642,7 @@ class CrawlerService:
             remove_overlay_elements=settings.crawl_remove_overlays,
             word_count_threshold=settings.crawl_min_words,
             deep_crawl_strategy=deep_crawl_strategy,
-            verbose=True
+            verbose=settings.debug
         )
         
         pages = []
@@ -795,7 +760,7 @@ class CrawlerService:
         """Extract href from link object."""
         if isinstance(link, dict):
             return link.get('href', '')
-        elif isinstance(link, str):
+        if isinstance(link, str):
             return link
         else:
             return str(link) if link else ''

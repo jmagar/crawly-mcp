@@ -1,7 +1,6 @@
 """
 Configuration management for Crawlerr using Pydantic Settings.
 """
-from typing import List
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator, ConfigDict
 import os
@@ -89,6 +88,17 @@ class CrawlerrSettings(BaseSettings):
     crawl_scroll_count: int = Field(default=20, alias="CRAWL_SCROLL_COUNT")
     crawl_memory_threshold: float = Field(default=90.0, alias="CRAWL_MEMORY_THRESHOLD")
     
+    # URL Pattern Exclusions
+    crawl_exclude_url_patterns: list[str] = Field(
+        default=[
+            "*/internal*", "*/external*", "*/api/*", "*/admin/*", "*/login*", 
+            "*/logout*", "*/register*", "*/auth/*", "*/private/*", "*/secure/*",
+            "*/search*", "*/contact*", "*/privacy*", "*/terms*", "*/cookie*",
+            "*/rss*", "*/feed*", "*#*", "*?only*"
+        ],
+        alias="CRAWL_EXCLUDE_URL_PATTERNS"
+    )
+    
     # CORS & Security  
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
     cors_credentials: bool = Field(default=True, alias="CORS_CREDENTIALS")
@@ -96,7 +106,7 @@ class CrawlerrSettings(BaseSettings):
     request_timeout: float = Field(default=30.0, alias="REQUEST_TIMEOUT")
     
     @property 
-    def cors_origins_list(self) -> List[str]:
+    def cors_origins_list(self) -> list[str]:
         """Convert cors_origins string to list."""
         if self.cors_origins.strip() == "*":
             return ["*"]

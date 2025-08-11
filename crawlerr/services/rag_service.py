@@ -19,6 +19,9 @@ from fastmcp.exceptions import ToolError
 
 logger = logging.getLogger(__name__)
 
+# Approximate word-to-token ratio for English text
+WORD_TO_TOKEN_RATIO = 1.3
+
 
 class RagService:
     """
@@ -131,6 +134,53 @@ class RagService:
         
         return self._chunk_text_token_based(text, metadata)
     
+    def _build_token_offset_map(self, text: str, tokens: List[int]) -> List[Tuple[int, int]]:
+        """
+        Build a single-pass token-to-character offset map.
+        
+        Args:
+            text: Original text
+            tokens: Token list
+            
+        Returns:
+            List of (start_char, end_char) tuples for each token
+        """
+        offsets = []
+        
+        if self.tokenizer_type == "qwen":
+            # For HF tokenizers, use built-in offset mapping when available
+            try:
+                encoding = self.tokenizer(
+                    text, 
+                    return_offsets_mapping=True, 
+                    add_special_tokens=False
+                )
+                return encoding["offset_mapping"]
+            except:
+                # Fallback to manual computation
+                pass
+            
+            # Manual computation for HF tokenizers
+            char_pos = 0
+            for token in tokens:
+                token_text = self.tokenizer.decode([token], skip_special_tokens=True)
+                start_pos = char_pos
+                end_pos = char_pos + len(token_text)
+                offsets.append((start_pos, end_pos))
+                char_pos = end_pos
+                
+        else:  # tiktoken
+            # Manual computation for tiktoken
+            char_pos = 0
+            for token in tokens:
+                token_text = self.tokenizer.decode([token])
+                start_pos = char_pos
+                end_pos = char_pos + len(token_text)
+                offsets.append((start_pos, end_pos))
+                char_pos = end_pos
+        
+        return offsets
+        
     def _chunk_text_token_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
         Token-based chunking with semantic awareness.
@@ -144,6 +194,9 @@ class RagService:
         else:  # tiktoken
             tokens = self.tokenizer.encode(text)
         total_tokens = len(tokens)
+        
+        # Build token offset map once
+        token_offsets = self._build_token_offset_map(text, tokens)
         
         if total_tokens <= self.chunk_size_tokens:
             # Text fits in single chunk
@@ -174,24 +227,14 @@ class RagService:
             # Apply semantic-aware boundary detection
             if end_token_idx < total_tokens:  # Not the last chunk
                 chunk_text, adjusted_end_idx = self._find_semantic_boundary(
-                    text, chunk_text, start_token_idx, end_token_idx, tokens
+                    text, chunk_text, start_token_idx, end_token_idx, tokens, token_offsets
                 )
                 end_token_idx = adjusted_end_idx
             
             if chunk_text.strip():
-                # Calculate positions in original text
-                if start_token_idx > 0:
-                    if self.tokenizer_type == "qwen":
-                        start_char_pos = len(self.tokenizer.decode(tokens[:start_token_idx], skip_special_tokens=True))
-                    else:  # tiktoken
-                        start_char_pos = len(self.tokenizer.decode(tokens[:start_token_idx]))
-                else:
-                    start_char_pos = 0
-                    
-                if self.tokenizer_type == "qwen":
-                    end_char_pos = len(self.tokenizer.decode(tokens[:end_token_idx], skip_special_tokens=True))
-                else:  # tiktoken
-                    end_char_pos = len(self.tokenizer.decode(tokens[:end_token_idx]))
+                # Calculate positions using pre-computed offsets
+                start_char_pos = token_offsets[start_token_idx][0] if start_token_idx < len(token_offsets) else 0
+                end_char_pos = token_offsets[end_token_idx - 1][1] if end_token_idx > 0 and end_token_idx <= len(token_offsets) else len(text)
                 
                 chunk = {
                     'text': chunk_text.strip(),
@@ -206,9 +249,11 @@ class RagService:
                 chunks.append(chunk)
                 chunk_index += 1
             
+            previous_start = start_token_idx
             if end_token_idx < total_tokens:
                 next_start = max(0, end_token_idx - self.chunk_overlap_tokens)
-                if next_start <= start_token_idx:
+                if next_start <= previous_start:
+                    # No progress made, force advancement
                     next_start = end_token_idx
                 start_token_idx = next_start
             else:
@@ -216,53 +261,14 @@ class RagService:
         
         return chunks
     
-    def _find_semantic_boundary(
-        self, 
-        full_text: str, 
-        chunk_text: str, 
-        start_token_idx: int, 
-        end_token_idx: int, 
-        tokens: List[int]
-    ) -> Tuple[str, int]:
-        """
-        Find optimal semantic boundary for chunk splitting.
-        
-        Returns:
-            Tuple of (adjusted_chunk_text, adjusted_end_token_idx)
-        """
-        # Convert back to character positions to work with text
-        if start_token_idx > 0:
-            if self.tokenizer_type == "qwen":
-                start_char = len(self.tokenizer.decode(tokens[:start_token_idx], skip_special_tokens=True))
-            else:  # tiktoken
-                start_char = len(self.tokenizer.decode(tokens[:start_token_idx]))
-        else:
-            start_char = 0
-            
-        if self.tokenizer_type == "qwen":
-            end_char = len(self.tokenizer.decode(tokens[:end_token_idx], skip_special_tokens=True))
-        else:  # tiktoken
-            end_char = len(self.tokenizer.decode(tokens[:end_token_idx]))
-        
-        # Look for good break points in order of preference
-        search_text = full_text[start_char:min(end_char + 200, len(full_text))]
-        ideal_end = end_char - start_char
-        
-        # 1. Paragraph breaks (double newlines)
+    def _find_paragraph_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
+        """Find paragraph break boundary."""
         paragraph_breaks = [i for i, char in enumerate(search_text) if search_text[i:i+2] == '\n\n']
-        suitable_paragraph_breaks = [b for b in paragraph_breaks if ideal_end - 100 <= b <= ideal_end + 100]
+        suitable_breaks = [b for b in paragraph_breaks if ideal_end - 100 <= b <= ideal_end + 100]
+        return max(suitable_breaks) if suitable_breaks else None
         
-        if suitable_paragraph_breaks:
-            best_break = max(suitable_paragraph_breaks)
-            adjusted_text = search_text[:best_break].strip()
-            # Convert back to token index
-            if self.tokenizer_type == "qwen":
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
-            else:  # tiktoken
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
-            return adjusted_text, start_token_idx + len(adjusted_tokens)
-        
-        # 2. Sentence endings
+    def _find_sentence_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
+        """Find sentence ending boundary."""
         sentence_patterns = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
         sentence_breaks = []
         for pattern in sentence_patterns:
@@ -270,42 +276,68 @@ class RagService:
                 i + len(pattern) for i in range(len(search_text) - len(pattern)) 
                 if search_text[i:i+len(pattern)] == pattern
             ])
+        suitable_breaks = [b for b in sentence_breaks if ideal_end - 50 <= b <= ideal_end + 50]
+        return max(suitable_breaks) if suitable_breaks else None
         
-        suitable_sentence_breaks = [b for b in sentence_breaks if ideal_end - 50 <= b <= ideal_end + 50]
-        if suitable_sentence_breaks:
-            best_break = max(suitable_sentence_breaks)
-            adjusted_text = search_text[:best_break].strip()
-            if self.tokenizer_type == "qwen":
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
-            else:  # tiktoken
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
-            return adjusted_text, start_token_idx + len(adjusted_tokens)
-        
-        # 3. Line breaks
+    def _find_line_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
+        """Find line break boundary."""
         line_breaks = [i + 1 for i, char in enumerate(search_text) if char == '\n']
-        suitable_line_breaks = [b for b in line_breaks if ideal_end - 30 <= b <= ideal_end + 30]
+        suitable_breaks = [b for b in line_breaks if ideal_end - 30 <= b <= ideal_end + 30]
+        return max(suitable_breaks) if suitable_breaks else None
         
-        if suitable_line_breaks:
-            best_break = max(suitable_line_breaks)
-            adjusted_text = search_text[:best_break].strip()
-            if self.tokenizer_type == "qwen":
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
-            else:  # tiktoken
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
-            return adjusted_text, start_token_idx + len(adjusted_tokens)
-        
-        # 4. Word boundaries (spaces)
+    def _find_word_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
+        """Find word boundary."""
         word_breaks = [i + 1 for i, char in enumerate(search_text) if char == ' ']
-        suitable_word_breaks = [b for b in word_breaks if ideal_end - 20 <= b <= ideal_end + 20]
+        suitable_breaks = [b for b in word_breaks if ideal_end - 20 <= b <= ideal_end + 20]
+        return max(suitable_breaks) if suitable_breaks else None
         
-        if suitable_word_breaks:
-            best_break = max(suitable_word_breaks)
-            adjusted_text = search_text[:best_break].strip()
-            if self.tokenizer_type == "qwen":
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
-            else:  # tiktoken
-                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
-            return adjusted_text, start_token_idx + len(adjusted_tokens)
+    def _find_semantic_boundary(
+        self, 
+        full_text: str, 
+        chunk_text: str, 
+        start_token_idx: int, 
+        end_token_idx: int, 
+        tokens: List[int],
+        token_offsets: List[Tuple[int, int]]
+    ) -> Tuple[str, int]:
+        """
+        Find optimal semantic boundary for chunk splitting using pre-computed offsets.
+        
+        Returns:
+            Tuple of (adjusted_chunk_text, adjusted_end_token_idx)
+        """
+        # Get character positions from pre-computed offsets
+        start_char = token_offsets[start_token_idx][0] if start_token_idx < len(token_offsets) else 0
+        end_char = token_offsets[end_token_idx - 1][1] if end_token_idx > 0 and end_token_idx <= len(token_offsets) else len(full_text)
+        
+        # Look for good break points in order of preference
+        search_text = full_text[start_char:min(end_char + 200, len(full_text))]
+        ideal_end = end_char - start_char
+        
+        # Try boundary detectors in order of preference
+        boundary_finders = [
+            (self._find_paragraph_boundary, "paragraph"),
+            (self._find_sentence_boundary, "sentence"),
+            (self._find_line_boundary, "line"),
+            (self._find_word_boundary, "word")
+        ]
+        
+        for finder, boundary_type in boundary_finders:
+            best_break = finder(search_text, ideal_end)
+            if best_break is not None:
+                adjusted_text = search_text[:best_break].strip()
+                # Convert back to token index using single encode call
+                add_special_tokens = self.tokenizer_type != "qwen"
+                if self.tokenizer_type == "qwen":
+                    adjusted_tokens = self.tokenizer.encode(
+                        full_text[start_char:start_char + best_break], 
+                        add_special_tokens=False
+                    )
+                else:  # tiktoken
+                    adjusted_tokens = self.tokenizer.encode(
+                        full_text[start_char:start_char + best_break]
+                    )
+                return adjusted_text, start_token_idx + len(adjusted_tokens)
         
         # Fallback: use original chunk
         return chunk_text, end_token_idx
@@ -352,7 +384,7 @@ class RagService:
                     'end_pos': end,
                     'word_count': len(chunk_text.split()),
                     'char_count': len(chunk_text),
-                    'token_count_estimate': int(len(chunk_text.split()) * 1.3) if self.tokenizer is None else int(
+                    'token_count_estimate': int(len(chunk_text.split()) * WORD_TO_TOKEN_RATIO) if self.tokenizer is None else int(
                         len(self.tokenizer.encode(chunk_text, add_special_tokens=False)) 
                         if self.tokenizer_type == "qwen" 
                         else len(self.tokenizer.encode(chunk_text))
@@ -716,11 +748,11 @@ class RagService:
             if top_k and top_k < len(matches):
                 matches = matches[:top_k]
             
-            logger.debug(f"Custom algorithm reranked {len(matches)} results")
+            logger.debug("Custom algorithm reranked %d results", len(matches))
             return matches
             
         except Exception as e:
-            logger.warning(f"Custom reranking failed: {e}")
+            logger.warning("Custom reranking failed: %s", e)
             return matches
     
     async def get_stats(self) -> Dict[str, Any]:

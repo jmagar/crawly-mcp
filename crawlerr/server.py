@@ -339,12 +339,12 @@ async def startup_checks():
         logger.info("[bold green]🎉 Crawlerr server started successfully![/bold green]")
         
     except ToolError as e:
-        logger.exception("[red]❌ Critical startup error: %s[/red]", e)
+        logger.exception("[red]❌ Critical startup error[/red]")
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
     except (ConnectionError, TimeoutError) as e:
         logger.warning("[yellow]⚠️  Service connection failed: %s[/yellow]", e)
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
-    except Exception as e:
+    except Exception:
         logger.exception("[red]💥 Unexpected startup error[/red]")
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
 
@@ -380,7 +380,7 @@ def main() -> None:
         logger.info("Server stopped by user")
         sys.exit(0)
     except Exception as e:
-        logger.error("Server failed to start: %s", e)
+        logger.exception("Server failed to start: %s", e)
         sys.exit(1)
 
 

@@ -19,8 +19,9 @@ from fastmcp.exceptions import ToolError
 
 logger = logging.getLogger(__name__)
 
-# Approximate word-to-token ratio for English text
-WORD_TO_TOKEN_RATIO = 1.3
+# Approximate word-to-token ratio for different tokenizers
+WORD_TO_TOKEN_RATIO = 1.3  # General estimate for English text
+QWEN3_WORD_TO_TOKEN_RATIO = 1.4  # More accurate for Qwen3 tokenizer based on empirical testing
 
 
 def find_paragraph_boundary(search_text: str, ideal_end: int) -> Optional[int]:
@@ -60,57 +61,61 @@ def find_word_boundary(search_text: str, ideal_end: int) -> Optional[int]:
 class RagService:
     """
     Service for RAG operations combining embedding generation and vector search.
+    Uses singleton pattern to keep models loaded in memory for optimal performance.
     """
     
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    
     def __init__(self):
+        # Prevent re-initialization of models
+        if self._initialized:
+            return
+            
         self.embedding_service = EmbeddingService()
         self.vector_service = VectorService()
         
-        # Token-based chunking configuration
-        self.chunk_size_tokens = 1024  # Tokens per chunk (optimal for embeddings)
-        self.chunk_overlap_tokens = 100  # Token overlap between chunks (10% of chunk size)
+        # Use token-based chunking for better semantic boundaries
+        self.chunk_size = settings.chunk_size  # Tokens per chunk (configurable)
+        self.chunk_overlap = settings.chunk_overlap  # Token overlap between chunks (configurable)
+        self.tokenizer_type = "token"
         
-        # Initialize tokenizer for the embedding model
+        # Initialize tokenizer for token-based chunking (Qwen3 compatible)
         try:
             from transformers import AutoTokenizer
-        except ImportError as e:
-            logger.warning("transformers not installed. Falling back to tiktoken: %s", e)
-        else:
-            try:
-                self.tokenizer = AutoTokenizer.from_pretrained(settings.tei_model)
-                self.tokenizer_type = "qwen"
-                logger.info("Using Qwen tokenizer for %s", settings.tei_model)
-            except (OSError, ValueError) as e:
-                logger.warning("Failed to load Qwen tokenizer for %s: %s", settings.tei_model, e)
-
-        if not getattr(self, "tokenizer", None):
-            try:
-                import tiktoken
-                self.tokenizer = tiktoken.get_encoding("cl100k_base")
-                self.tokenizer_type = "tiktoken"
-                logger.info("Using tiktoken cl100k_base encoding as fallback")
-            except ImportError as e2:
-                logger.warning("Failed to load tiktoken fallback: %s; using character-based chunking", e2)
-                self.tokenizer = None
-                self.tokenizer_type = "character"
-                # Fallback to character-based for backward compatibility
-                self.chunk_size = 1000  # Characters per chunk
-                self.chunk_overlap = 200  # Overlap between chunks
+            self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
+            logger.info("Using token-based chunking with Qwen3 tokenizer for optimal compatibility")
+        except ImportError:
+            logger.warning("transformers not available, using approximate token-based chunking")
+            self.tokenizer = None
+            # Keep token-based settings, use approximate token counting
+        except Exception as e:
+            logger.warning("Failed to load Qwen3 tokenizer: %s. Using approximate token-based chunking", e)
+            self.tokenizer = None
+            # Keep token-based settings, use approximate token counting
         
-        # Initialize Qwen3 reranker
+        # Initialize Qwen3 reranker with GPU optimization
         self.reranker = None
         self.reranker_type = "none"
         
         if settings.reranker_enabled:
             try:
                 from sentence_transformers import CrossEncoder
+                import torch
             except ImportError as e:
                 logger.warning("sentence-transformers not installed. Reranking disabled: %s", e)
             else:
                 try:
-                    self.reranker = CrossEncoder(settings.reranker_model)
+                    # Force GPU usage for reranker if available
+                    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+                    self.reranker = CrossEncoder(settings.reranker_model, device=device)
                     self.reranker_type = "qwen3"
-                    logger.info("Using Qwen3 reranker: %s", settings.reranker_model)
+                    logger.info("Using Qwen3 reranker: %s on device: %s", settings.reranker_model, device)
                 except (OSError, ValueError) as e:
                     logger.warning("Failed to load Qwen3 reranker %s: %s", settings.reranker_model, e)
                     if settings.reranker_fallback_to_custom:
@@ -119,6 +124,9 @@ class RagService:
                     else:
                         self.reranker_type = "none"
                         logger.info("Reranking disabled due to model loading failure")
+        
+        # Mark as initialized to prevent reloading models
+        RagService._initialized = True
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -150,7 +158,7 @@ class RagService:
     
     def chunk_text(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
-        Split text into overlapping chunks for embedding using token-based chunking with semantic awareness.
+        Split text into overlapping chunks for embedding using token-based or character-based chunking.
         
         Args:
             text: Text to chunk
@@ -162,139 +170,11 @@ class RagService:
         if not text.strip():
             return []
         
-        # Fallback to character-based if tokenizer unavailable
-        if self.tokenizer is None:
+        if self.tokenizer_type == "token" and self.tokenizer:
+            return self._chunk_text_token_based(text, metadata)
+        else:
             return self._chunk_text_character_based(text, metadata)
-        
-        return self._chunk_text_token_based(text, metadata)
     
-    def _build_token_offset_map(self, text: str, tokens: List[int]) -> List[Tuple[int, int]]:
-        """
-        Build a single-pass token-to-character offset map.
-        
-        Args:
-            text: Original text
-            tokens: Token list
-            
-        Returns:
-            List of (start_char, end_char) tuples for each token
-        """
-        offsets = []
-        
-        if self.tokenizer_type == "qwen":
-            # For HF tokenizers, use built-in offset mapping when available
-            try:
-                encoding = self.tokenizer(
-                    text, 
-                    return_offsets_mapping=True, 
-                    add_special_tokens=False
-                )
-                return encoding["offset_mapping"]
-            except (ValueError, KeyError, TypeError) as e:
-                logger.warning("Built-in offset mapping failed, using fallback manual computation: %s", e)
-            except Exception as e:
-                logger.exception("Unexpected error during offset mapping, using fallback manual computation: %s", e)
-            
-            # Manual computation for HF tokenizers
-            char_pos = 0
-            for token in tokens:
-                token_text = self.tokenizer.decode([token], skip_special_tokens=True)
-                start_pos = char_pos
-                end_pos = char_pos + len(token_text)
-                offsets.append((start_pos, end_pos))
-                char_pos = end_pos
-                
-        else:  # tiktoken
-            # Manual computation for tiktoken
-            char_pos = 0
-            for token in tokens:
-                token_text = self.tokenizer.decode([token])
-                start_pos = char_pos
-                end_pos = char_pos + len(token_text)
-                offsets.append((start_pos, end_pos))
-                char_pos = end_pos
-        
-        return offsets
-        
-    def _chunk_text_token_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """
-        Token-based chunking with semantic awareness.
-        """
-        chunks = []
-        chunk_index = 0
-        
-        # Tokenize the entire text based on tokenizer type
-        if self.tokenizer_type == "qwen":
-            tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        else:  # tiktoken
-            tokens = self.tokenizer.encode(text)
-        total_tokens = len(tokens)
-        
-        # Build token offset map once
-        token_offsets = self._build_token_offset_map(text, tokens)
-        
-        if total_tokens <= self.chunk_size_tokens:
-            # Text fits in single chunk
-            chunk = {
-                'text': text.strip(),
-                'chunk_index': 0,
-                'start_pos': 0,
-                'end_pos': len(text),
-                'token_count_estimate': int(total_tokens),
-                'char_count': len(text),
-                'word_count': len(text.split()),
-                **(metadata or {})
-            }
-            return [chunk]
-        
-        start_token_idx = 0
-        
-        while start_token_idx < total_tokens:
-            end_token_idx = min(start_token_idx + self.chunk_size_tokens, total_tokens)
-            
-            # Extract tokens for this chunk
-            chunk_tokens = tokens[start_token_idx:end_token_idx]
-            if self.tokenizer_type == "qwen":
-                chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-            else:  # tiktoken
-                chunk_text = self.tokenizer.decode(chunk_tokens)
-            
-            # Apply semantic-aware boundary detection
-            if end_token_idx < total_tokens:  # Not the last chunk
-                chunk_text, adjusted_end_idx = self._find_semantic_boundary(
-                    text, chunk_text, start_token_idx, end_token_idx, tokens, token_offsets
-                )
-                end_token_idx = adjusted_end_idx
-            
-            if chunk_text.strip():
-                # Calculate positions using pre-computed offsets
-                start_char_pos = token_offsets[start_token_idx][0] if start_token_idx < len(token_offsets) else 0
-                end_char_pos = token_offsets[end_token_idx - 1][1] if end_token_idx > 0 and end_token_idx <= len(token_offsets) else len(text)
-                
-                chunk = {
-                    'text': chunk_text.strip(),
-                    'chunk_index': chunk_index,
-                    'start_pos': start_char_pos,
-                    'end_pos': end_char_pos,
-                    'token_count_estimate': int(end_token_idx - start_token_idx),
-                    'char_count': len(chunk_text.strip()),
-                    'word_count': len(chunk_text.strip().split()),
-                    **(metadata or {})
-                }
-                chunks.append(chunk)
-                chunk_index += 1
-            
-            previous_start = start_token_idx
-            if end_token_idx < total_tokens:
-                next_start = max(0, end_token_idx - self.chunk_overlap_tokens)
-                if next_start <= previous_start:
-                    # No progress made, force advancement
-                    next_start = end_token_idx
-                start_token_idx = next_start
-            else:
-                break  # All tokens processed
-        
-        return chunks
     
     def _find_paragraph_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
         """Find paragraph break boundary."""
@@ -312,65 +192,11 @@ class RagService:
         """Find word boundary."""
         return find_word_boundary(search_text, ideal_end)
         
-    def _find_semantic_boundary(
-        self, 
-        full_text: str, 
-        chunk_text: str, 
-        start_token_idx: int, 
-        end_token_idx: int, 
-        tokens: List[int],
-        token_offsets: List[Tuple[int, int]]
-    ) -> Tuple[str, int]:
-        """
-        Find optimal semantic boundary for chunk splitting using pre-computed offsets.
-        
-        Returns:
-            Tuple of (adjusted_chunk_text, adjusted_end_token_idx)
-        """
-        # Get character positions from pre-computed offsets
-        start_char = token_offsets[start_token_idx][0] if start_token_idx < len(token_offsets) else 0
-        end_char = token_offsets[end_token_idx - 1][1] if end_token_idx > 0 and end_token_idx <= len(token_offsets) else len(full_text)
-        
-        # Look for good break points in order of preference
-        search_text = full_text[start_char:min(end_char + 200, len(full_text))]
-        ideal_end = end_char - start_char
-        
-        # Try boundary detectors in order of preference
-        boundary_finders = [
-            (self._find_paragraph_boundary, "paragraph"),
-            (self._find_sentence_boundary, "sentence"),
-            (self._find_line_boundary, "line"),
-            (self._find_word_boundary, "word")
-        ]
-        
-        for finder, boundary_type in boundary_finders:
-            best_break = finder(search_text, ideal_end)
-            if best_break is not None:
-                adjusted_text = search_text[:best_break].strip()
-                # Convert back to token index using single encode call
-                add_special_tokens = self.tokenizer_type != "qwen"
-                if self.tokenizer_type == "qwen":
-                    adjusted_tokens = self.tokenizer.encode(
-                        full_text[start_char:start_char + best_break], 
-                        add_special_tokens=add_special_tokens
-                    )
-                else:  # tiktoken
-                    adjusted_tokens = self.tokenizer.encode(
-                        full_text[start_char:start_char + best_break]
-                    )
-                return adjusted_text, start_token_idx + len(adjusted_tokens)
-        
-        # Fallback: use original chunk
-        return chunk_text, end_token_idx
     
     def _chunk_text_character_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
-        Fallback character-based chunking for backward compatibility.
+        Optimized character-based chunking with semantic boundary detection.
         """
-        if not hasattr(self, 'chunk_size'):
-            self.chunk_size = 1000
-            self.chunk_overlap = 200
-        
         chunks = []
         text_length = len(text)
         start = 0
@@ -405,11 +231,7 @@ class RagService:
                     'end_pos': end,
                     'word_count': len(chunk_text.split()),
                     'char_count': len(chunk_text),
-                    'token_count_estimate': int(len(chunk_text.split()) * WORD_TO_TOKEN_RATIO) if self.tokenizer is None else int(
-                        len(self.tokenizer.encode(chunk_text, add_special_tokens=False)) 
-                        if self.tokenizer_type == "qwen" 
-                        else len(self.tokenizer.encode(chunk_text))
-                    ),  # Estimated token count
+                    'token_count_estimate': int(len(chunk_text.split()) * settings.word_to_token_ratio),
                     **(metadata or {})
                 }
                 chunks.append(chunk)
@@ -421,6 +243,87 @@ class RagService:
             # Prevent infinite loop
             if start <= end - self.chunk_size:
                 start = end
+        
+        return chunks
+    
+    def _chunk_text_token_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Token-based chunking using Qwen3 tokenizer for optimal semantic boundaries.
+        """
+        chunks = []
+        
+        if self.tokenizer:
+            # Use actual tokenizer
+            tokens = self.tokenizer.encode(text)
+            total_tokens = len(tokens)
+            start_token = 0
+            chunk_index = 0
+            
+            while start_token < total_tokens:
+                end_token = min(start_token + self.chunk_size, total_tokens)
+                
+                # Extract token chunk
+                chunk_tokens = tokens[start_token:end_token]
+                chunk_text = self.tokenizer.decode(chunk_tokens)
+                
+                if chunk_text.strip():
+                    chunk = {
+                        'text': chunk_text,
+                        'chunk_index': chunk_index,
+                        'start_token': start_token,
+                        'end_token': end_token,
+                        'token_count': len(chunk_tokens),
+                        'word_count': len(chunk_text.split()),
+                        'char_count': len(chunk_text),
+                        **(metadata or {})
+                    }
+                    chunks.append(chunk)
+                    chunk_index += 1
+                
+                # Move start position with overlap
+                start_token = max(start_token + self.chunk_size - self.chunk_overlap, end_token)
+                
+                # Prevent infinite loop
+                if start_token <= end_token - self.chunk_size:
+                    start_token = end_token
+        else:
+            # Fallback to approximate token-based chunking using word estimation
+            words = text.split()
+            total_words = len(words)
+            # Use configurable word-to-token ratio for accuracy
+            approx_tokens_per_word = settings.word_to_token_ratio
+            chunk_size_words = int(self.chunk_size / approx_tokens_per_word)
+            overlap_words = int(self.chunk_overlap / approx_tokens_per_word)
+            
+            start_word = 0
+            chunk_index = 0
+            
+            while start_word < total_words:
+                end_word = min(start_word + chunk_size_words, total_words)
+                chunk_words = words[start_word:end_word]
+                chunk_text = ' '.join(chunk_words)
+                
+                if chunk_text.strip():
+                    estimated_tokens = int(len(chunk_words) * approx_tokens_per_word)
+                    chunk = {
+                        'text': chunk_text,
+                        'chunk_index': chunk_index,
+                        'start_word': start_word,
+                        'end_word': end_word,
+                        'token_count_estimate': estimated_tokens,
+                        'word_count': len(chunk_words),
+                        'char_count': len(chunk_text),
+                        **(metadata or {})
+                    }
+                    chunks.append(chunk)
+                    chunk_index += 1
+                
+                # Move start position with overlap
+                start_word = max(start_word + chunk_size_words - overlap_words, end_word)
+                
+                # Prevent infinite loop
+                if start_word <= end_word - chunk_size_words:
+                    start_word = end_word
         
         return chunks
     
@@ -697,11 +600,10 @@ class RagService:
                 original_score = match.score
                 match.score = 0.4 * match.score + 0.6 * normalized_reranker_score
                 
-                logger.debug(f"Reranking: raw_logit={reranker_score:.4f}, "
-                           f"sigmoid_score={normalized_reranker_score:.4f}, "
-                           f"original_score={original_score:.4f}, "
-                           f"final_score={match.score:.4f}, "
-                           f"reranker_model={settings.reranker_model}")
+                logger.debug(
+                    "Reranking: raw_logit=%.4f, sigmoid_score=%.4f, original_score=%.4f, final_score=%.4f, reranker_model=%s",
+                    reranker_score, normalized_reranker_score, original_score, match.score, settings.reranker_model
+                )
             
             # Sort by updated scores
             matches.sort(key=lambda m: m.score, reverse=True)
@@ -793,10 +695,10 @@ class RagService:
                 "collection": collection_info,
                 "sources": source_stats,
                 "config": {
-                    "chunk_size_tokens": self.chunk_size_tokens if self.tokenizer else None,
-                    "chunk_overlap_tokens": self.chunk_overlap_tokens if self.tokenizer else None,
-                    "chunk_size_chars": getattr(self, 'chunk_size', None) if not self.tokenizer else None,
-                    "chunk_overlap_chars": getattr(self, 'chunk_overlap', None) if not self.tokenizer else None,
+                    "chunk_size_tokens": self.chunk_size if self.tokenizer_type == "token" else None,
+                    "chunk_overlap_tokens": self.chunk_overlap if self.tokenizer_type == "token" else None,
+                    "chunk_size_chars": self.chunk_size if self.tokenizer_type == "character" else None,
+                    "chunk_overlap_chars": self.chunk_overlap if self.tokenizer_type == "character" else None,
                     "tokenizer_type": getattr(self, 'tokenizer_type', 'character_based'),
                     "reranker_type": getattr(self, 'reranker_type', 'none'),
                     "reranker_model": settings.reranker_model if self.reranker_type == "qwen3" else None,

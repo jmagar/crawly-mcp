@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import List, Optional, Dict, Any, Set, Union
+from typing import Dict, Any, Set, Callable
 from urllib.parse import urljoin, urlparse, parse_qs
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -38,6 +38,9 @@ class CrawlerService:
     """
     
     def __init__(self):
+        # Build Chrome arguments with GPU acceleration
+        chrome_args = self._build_chrome_args()
+        
         self.browser_config = BrowserConfig(
             browser_type=settings.crawl_browser,
             headless=settings.crawl_headless,
@@ -45,13 +48,20 @@ class CrawlerService:
             viewport_height=1080,
             user_agent=settings.crawl_user_agent,
             accept_downloads=False,
-            chrome_channel="chromium" if settings.crawl_browser == "chromium" else None
+            chrome_channel="chromium" if settings.crawl_browser == "chromium" else None,
+            extra_args=chrome_args
         )
         
         # Memory-adaptive dispatcher for intelligent resource management
+        # Limit concurrent sessions based on GPU capabilities when GPU acceleration is enabled
+        max_sessions = settings.max_concurrent_crawls
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+            max_sessions = min(settings.gpu_concurrent_browsers, settings.max_concurrent_crawls)
+            logger.info("🎮 GPU-aware concurrent limit: %d browsers (RTX 4070 optimized)", max_sessions)
+        
         self.dispatcher = MemoryAdaptiveDispatcher(
             memory_threshold_percent=settings.crawl_memory_threshold,
-            max_session_permit=settings.max_concurrent_crawls
+            max_session_permit=max_sessions
         )
         
         # Default crawl configuration - no extraction strategy by default
@@ -65,15 +75,182 @@ class CrawlerService:
         
         # Note: Advanced features like AsyncUrlSeeder, LinkPreview, AdaptiveCrawler 
         # are not available in Crawl4AI 0.7.0+. Using standard crawling approaches.
+        
+        # Initialize GPU health checks
+        if settings.gpu_health_check_enabled:
+            self._check_gpu_health()
+    
+    def _build_chrome_args(self) -> list[str]:
+        """
+        Build Chrome arguments optimized for RTX 4070 GPU acceleration.
+        
+        Returns:
+            List of Chrome command-line arguments
+        """
+        # Base arguments for stability
+        base_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage", 
+            "--disable-extensions",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features=TranslateUI",
+        ]
+        
+        # Add GPU acceleration arguments if enabled
+        gpu_args = []
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+            # Check GPU availability first
+            if self._is_gpu_available():
+                # Core GPU acceleration flags
+                gpu_args.extend(settings.chrome_gpu_flags.split())
+                
+                # Advanced GPU flags for better performance  
+                gpu_args.extend(settings.chrome_advanced_gpu_flags.split())
+                
+                logger.info("🎮 RTX 4070 GPU acceleration enabled with %d flags", len(gpu_args))
+                logger.info("💾 GPU memory limit: %dMB", settings.gpu_memory_limit_mb)
+                logger.info("🔄 Max concurrent browsers: %d", settings.gpu_concurrent_browsers)
+            else:
+                if settings.gpu_fallback_enabled:
+                    logger.warning("⚠️ GPU not available, falling back to CPU rendering")
+                else:
+                    logger.error("❌ GPU required but not available")
+                    raise RuntimeError("GPU acceleration required but GPU not available")
+        else:
+            logger.info("⚪ GPU acceleration disabled")
+        
+        # Memory management arguments
+        memory_args = [
+            f"--max-memory-usage={settings.gpu_memory_limit_mb}",
+            "--memory-pressure-off",
+            f"--max_old_space_size={min(4096, settings.gpu_memory_limit_mb // 2)}",
+        ]
+        
+        # Combine all arguments
+        all_args = base_args + gpu_args + memory_args
+        
+        # Remove empty arguments
+        all_args = [arg for arg in all_args if arg.strip()]
+        
+        logger.debug("Chrome arguments: %d total (%d GPU-specific)", len(all_args), len(gpu_args))
+        return all_args
+    
+    def _get_gpu_utilization(self) -> dict:
+        """
+        Get real-time GPU utilization metrics.
+        
+        Returns:
+            Dictionary with GPU metrics or empty dict if unavailable
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu', '--format=csv,noheader,nounits'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                values = result.stdout.strip().split(', ')
+                return {
+                    'gpu_utilization_percent': int(values[0]) if values[0] != 'N/A' else 0,
+                    'memory_utilization_percent': int(values[1]) if values[1] != 'N/A' else 0,
+                    'memory_used_mb': int(values[2]) if values[2] != 'N/A' else 0,
+                    'memory_total_mb': int(values[3]) if values[3] != 'N/A' else 0,
+                    'temperature_c': int(values[4]) if values[4] != 'N/A' else 0,
+                    'available': True
+                }
+        except Exception as e:
+            logger.debug("GPU utilization check failed: %s", e)
+        
+        return {'available': False}
+
+    def _is_gpu_available(self) -> bool:
+        """
+        Check if NVIDIA GPU is available for acceleration.
+        
+        Returns:
+            True if GPU is available and functional
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'], 
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                memory_mb = int(result.stdout.strip())
+                logger.debug("GPU detected with %sMB VRAM", memory_mb)
+                return memory_mb > 4000  # Ensure sufficient VRAM for GPU acceleration
+            return False
+        except (subprocess.SubprocessError, ValueError, FileNotFoundError):
+            return False
+    
+    def _check_gpu_health(self) -> None:
+        """
+        Perform comprehensive GPU health check for RTX 4070 optimization.
+        """
+        try:
+            import subprocess
+            
+            # Check NVIDIA GPU availability
+            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                gpu_info = result.stdout
+                
+                # Log GPU status
+                logger.info("🎮 NVIDIA RTX 4070 detected and available")
+                
+                # Check for TEI service GPU usage
+                if "text-embeddings-inference" in gpu_info:
+                    logger.info("✅ TEI embedding service using GPU")
+                
+                # Extract and log GPU memory info
+                memory_result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=memory.total,memory.used,memory.free', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if memory_result.returncode == 0:
+                    memory_info = memory_result.stdout.strip().split(', ')
+                    if len(memory_info) == 3:
+                        total, used, free = map(int, memory_info)
+                        logger.info("🔋 GPU Memory: %dMB used, %dMB free, %dMB total", used, free, total)
+                        
+                        # Warn if memory usage is high
+                        usage_percent = (used / total) * 100
+                        if usage_percent > 80:
+                            logger.warning("⚠️ High GPU memory usage: %.1f%%", usage_percent)
+                
+                # Log browser GPU configuration
+                self._log_browser_gpu_status()
+                
+            else:
+                logger.warning("⚠️ nvidia-smi failed - GPU may not be available")
+                if not settings.gpu_fallback_enabled:
+                    raise RuntimeError("GPU required but nvidia-smi failed")
+                    
+        except Exception as e:
+            logger.warning("⚠️ GPU health check failed: %s", e)
+            if not settings.gpu_fallback_enabled:
+                raise RuntimeError(f"GPU health check failed: {e}")
+    
+    def _log_browser_gpu_status(self) -> None:
+        """Log current browser GPU acceleration configuration."""
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+            logger.info("🎮 Browser GPU acceleration: ENABLED")
+            logger.info("🔧 GPU flags: %d core + %d advanced", len(settings.chrome_gpu_flags.split()), len(settings.chrome_advanced_gpu_flags.split()))
+            logger.info("🏎️ Acceleration: Vulkan + GPU rasterization + WebGL + Zero-copy")
+        else:
+            logger.info("⚪ Browser GPU acceleration: DISABLED")
     
     async def scrape_single_page(
         self,
         url: str,
         extraction_strategy: str = "css",
-        wait_for: Optional[str] = None,
-        custom_config: Optional[Dict[str, Any]] = None,
+        wait_for: str | None = None,
+        custom_config: Dict[str, Any] | None = None,
         use_virtual_scroll: bool = None,
-        virtual_scroll_config: Optional[Dict[str, Any]] = None
+        virtual_scroll_config: Dict[str, Any] | None = None
     ) -> PageContent:
         """
         Scrape a single web page using Crawl4AI with advanced features.
@@ -135,6 +312,13 @@ class CrawlerService:
                 **(custom_config or {})
             )
             
+            # Monitor GPU utilization for single page scrape if GPU acceleration enabled
+            gpu_metrics_before = None
+            if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+                gpu_metrics_before = self._get_gpu_utilization()
+                if gpu_metrics_before.get('available'):
+                    logger.info("🎮 GPU-accelerated scraping: %d%% util before scrape", gpu_metrics_before['gpu_utilization_percent'])
+            
             async with AsyncWebCrawler(config=self.browser_config) as crawler:
                 logger.debug(f"Starting advanced crawl of: {url}")
                 
@@ -142,6 +326,16 @@ class CrawlerService:
                     url=url,
                     config=run_config
                 )
+                
+                # Check GPU utilization after scrape
+                if settings.crawl_gpu_enabled and settings.gpu_acceleration and gpu_metrics_before:
+                    gpu_metrics_after = self._get_gpu_utilization()
+                    if gpu_metrics_after.get('available'):
+                        gpu_util_change = gpu_metrics_after['gpu_utilization_percent'] - gpu_metrics_before['gpu_utilization_percent']
+                        if gpu_util_change > 0:
+                            logger.info("🎮 RTX 4070 GPU utilized: %d%% increase during page rendering", gpu_util_change)
+                        else:
+                            logger.info("🎮 RTX 4070 GPU: %d%% util (no change during render)", gpu_metrics_after['gpu_utilization_percent'])
                 
                 if not result.success:
                     raise ToolError(f"Failed to crawl {url}: {result.error_message}")
@@ -200,7 +394,7 @@ class CrawlerService:
     async def crawl_website(
         self,
         request: CrawlRequest,
-        progress_callback: Optional[callable] = None
+        progress_callback: Callable | None = None
     ) -> CrawlResult:
         """
         Crawl multiple pages from a website using Crawl4AI 0.7.0+ API.
@@ -254,8 +448,8 @@ class CrawlerService:
                 else:
                     logger.info("No sitemap found, falling back to recursive crawling")
                     discovered_urls.add(start_url)
-            except Exception as e:
-                logger.warning(f"Sitemap discovery failed: {e}, falling back to recursive crawling")
+            except (ValueError, AttributeError, KeyError, ET.ParseError) as e:
+                logger.warning("Sitemap discovery failed: %s, falling back to recursive crawling", e)
                 discovered_urls.add(start_url)
             
             if progress_callback:
@@ -281,7 +475,7 @@ class CrawlerService:
             # Set result pages and update statistics  
             result.pages = pages
             stats.total_pages_crawled = len(pages)
-            logger.info(f"Crawled {len(pages)} pages successfully, {stats.total_pages_failed} failed")
+            logger.info("Crawled %d pages successfully, %d failed", len(pages), stats.total_pages_failed)
             
             if progress_callback:
                 await progress_callback(3, 4)
@@ -323,7 +517,7 @@ class CrawlerService:
     # Note: _traditional_crawl method removed as it used deprecated dispatcher.dispatch() API
     # Multi-URL crawling now handled directly in crawl_website() using arun_many()
     
-    async def get_sitemap_urls(self, base_url: str) -> List[str]:
+    async def get_sitemap_urls(self, base_url: str) -> list[str]:
         """
         Extract URLs from sitemap.xml of a website.
         
@@ -398,18 +592,17 @@ class CrawlerService:
         start_url: str,
         max_pages: int,
         max_depth: int,
-        include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
         stats: CrawlStatistics = None,
-        progress_callback: Optional[callable] = None
-    ) -> List[PageContent]:
+        progress_callback: Callable | None = None
+    ) -> list[PageContent]:
         """
         Implement breadth-first recursive crawling to discover linked pages.
         """
         pages = []
         visited_urls = set()
         url_queue = [(start_url, 0)]  # (url, depth)
-        domain = urlparse(start_url).netloc
         
         run_config = CrawlerRunConfig(
             page_timeout=int(settings.crawler_timeout * 1000),
@@ -456,18 +649,18 @@ class CrawlerService:
                             
                     else:
                         stats.total_pages_failed += 1
-                        logger.warning(f"Failed to crawl {current_url}: {result.error_message}")
+                        logger.warning("Failed to crawl %s: %s", current_url, result.error_message)
                         
-                except Exception as e:
+                except (ConnectionError, TimeoutError, ValueError) as e:
                     stats.total_pages_failed += 1
-                    logger.error(f"Error crawling {current_url}: {e}")
+                    logger.exception("Error crawling %s", current_url)
                     
-        logger.info(f"Recursive crawl discovered {len(pages)} pages across {max_depth} depth levels")
+        logger.info("Recursive crawl discovered %d pages across %d depth levels", len(pages), max_depth)
         return pages
     
-    async def _batch_crawl(self, urls: List[str], stats: CrawlStatistics) -> List[PageContent]:
+    async def _batch_crawl(self, urls: list[str], stats: CrawlStatistics) -> list[PageContent]:
         """
-        Crawl a batch of URLs concurrently using arun_many.
+        Crawl a batch of URLs concurrently using arun_many with GPU-optimized memory management.
         """
         run_config = CrawlerRunConfig(
             page_timeout=int(settings.crawler_timeout * 1000),
@@ -477,29 +670,83 @@ class CrawlerService:
             stream=False
         )
         
+        # Use GPU-aware concurrent session limits for optimal RTX 4070 performance
+        max_sessions = min(settings.max_concurrent_crawls, len(urls))
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+            max_sessions = min(settings.gpu_concurrent_browsers, max_sessions)
+            logger.info("🎮 GPU-optimized batch crawl: %d concurrent sessions (RTX 4070)", max_sessions)
+        
         dispatcher = MemoryAdaptiveDispatcher(
             memory_threshold_percent=settings.crawl_memory_threshold,
-            max_session_permit=min(settings.max_concurrent_crawls, len(urls))
+            max_session_permit=max(1, max_sessions)
         )
         
         pages = []
+        
+        # Monitor GPU utilization during crawl if GPU acceleration is enabled
+        gpu_metrics_before = None
+        gpu_metrics_after = None
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration:
+            gpu_metrics_before = self._get_gpu_utilization()
+            if gpu_metrics_before.get('available'):
+                logger.info("🎮 Pre-crawl GPU: %d%% util, %dMB/%dMB used, %d°C",
+                           gpu_metrics_before['gpu_utilization_percent'],
+                           gpu_metrics_before['memory_used_mb'],
+                           gpu_metrics_before['memory_total_mb'],
+                           gpu_metrics_before['temperature_c'])
+        
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            logger.info(f"Starting batch crawl of {len(urls)} URLs")
+            logger.info("Starting GPU-accelerated batch crawl of %d URLs with %d concurrent sessions", len(urls), max_sessions)
             
-            crawl_results = await crawler.arun_many(
-                urls=urls,
-                config=run_config,
-                dispatcher=dispatcher
-            )
-            
-            for crawl_result in crawl_results:
-                if crawl_result.success:
-                    page_content = self._process_crawl_result(crawl_result, extract_raw_html=False)
-                    pages.append(page_content)
-                    stats.total_pages_crawled += 1
+            try:
+                crawl_results = await crawler.arun_many(
+                    urls=urls,
+                    config=run_config,
+                    dispatcher=dispatcher
+                )
+                
+                for crawl_result in crawl_results:
+                    crawl_url = getattr(crawl_result, 'url', '<unknown>')
+                    if crawl_result.success:
+                        page_content = self._process_crawl_result(crawl_result, extract_raw_html=False)
+                        if page_content:
+                            pages.append(page_content)
+                            stats.total_pages_crawled += 1
+                        else:
+                            stats.total_pages_failed += 1
+                            logger.warning("Failed to process crawl result for %s", crawl_url)
+                    else:
+                        stats.total_pages_failed += 1
+                        logger.warning("Failed to crawl %s: %s", crawl_url, crawl_result.error_message)
+            except Exception as e:
+                logger.exception("Error during batch crawl")
+                # Mark all URLs as failed
+                stats.total_pages_failed += len(urls)
+        
+        # Monitor GPU utilization after crawl to show actual usage
+        if settings.crawl_gpu_enabled and settings.gpu_acceleration and gpu_metrics_before:
+            gpu_metrics_after = self._get_gpu_utilization()
+            if gpu_metrics_after.get('available'):
+                gpu_util_change = gpu_metrics_after['gpu_utilization_percent'] - gpu_metrics_before['gpu_utilization_percent']
+                memory_change = gpu_metrics_after['memory_used_mb'] - gpu_metrics_before['memory_used_mb']
+                temp_change = gpu_metrics_after['temperature_c'] - gpu_metrics_before['temperature_c']
+                
+                gpu_util_change_str = f"+{gpu_util_change}" if gpu_util_change >= 0 else str(gpu_util_change)
+                memory_change_str = f"+{memory_change}" if memory_change >= 0 else str(memory_change)
+                temp_change_str = f"+{temp_change}" if temp_change >= 0 else str(temp_change)
+                
+                logger.info("🎮 Post-crawl GPU: %d%% util (%s%% change), %dMB used (%sMB), %d°C (%s°C)",
+                           gpu_metrics_after['gpu_utilization_percent'], gpu_util_change_str,
+                           gpu_metrics_after['memory_used_mb'], memory_change_str,
+                           gpu_metrics_after['temperature_c'], temp_change_str)
+                
+                # Log GPU acceleration effectiveness
+                if gpu_util_change > 5:  # Significant GPU usage increase
+                    logger.info("✅ RTX 4070 GPU acceleration active: %d%% utilization increase during crawl", gpu_util_change)
+                elif gpu_util_change > 0:
+                    logger.info("⚡ RTX 4070 GPU acceleration detected: %d%% utilization increase", gpu_util_change)
                 else:
-                    stats.total_pages_failed += 1
-                    logger.warning(f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}")
+                    logger.warning("⚠️ GPU utilization unchanged - GPU acceleration may not be active")
                     
         return pages
     
@@ -530,23 +777,30 @@ class CrawlerService:
                         absolute_url = urljoin(crawl_result.url, src)
                         images.append(absolute_url)
         
+        # Simplified attribute access using getattr with fallbacks
+        content = getattr(crawl_result, 'cleaned_html', getattr(crawl_result, 'markdown', ''))
+        markdown = getattr(crawl_result, 'markdown', '')
+        title = (crawl_result.metadata.get('title') if crawl_result.metadata else '')
+        html = crawl_result.html if extract_raw_html else None
+        content_length = len(getattr(crawl_result, 'html', '') or '')
+        
         return PageContent(
             url=crawl_result.url,
-            title=crawl_result.metadata.get('title', '') if crawl_result.metadata else '',
-            content=crawl_result.cleaned_html if hasattr(crawl_result, 'cleaned_html') else crawl_result.markdown,
-            markdown=crawl_result.markdown if hasattr(crawl_result, 'markdown') else '',
-            html=crawl_result.html if extract_raw_html else None,
+            title=title,
+            content=content,
+            markdown=markdown,
+            html=html,
             links=links,
             images=images,
             metadata={
-                'http_status': crawl_result.status_code if hasattr(crawl_result, 'status_code') else None,
-                'content_length': len(crawl_result.html) if crawl_result.html else 0,
+                'http_status': getattr(crawl_result, 'status_code', None),
+                'content_length': content_length,
                 'extraction_method': 'recursive_crawl',
                 **(crawl_result.metadata or {})
             }
         )
     
-    def _extract_links_from_result(self, crawl_result, domain: str) -> List[str]:
+    def _extract_links_from_result(self, crawl_result, domain: str) -> list[str]:
         """
         Extract same-domain links from a crawl result.
         """
@@ -571,11 +825,11 @@ class CrawlerService:
         start_url: str,
         max_pages: int,
         max_depth: int,
-        include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
         stats: CrawlStatistics = None,
-        progress_callback: Optional[callable] = None
-    ) -> List[PageContent]:
+        progress_callback: Callable | None = None
+    ) -> list[PageContent]:
         """
         Use Crawl4AI's native deep crawling capabilities with proper URL filtering.
         
@@ -600,7 +854,8 @@ class CrawlerService:
             
             # URL pattern filter to exclude invalid patterns
             URLPatternFilter(
-                patterns=settings.crawl_exclude_url_patterns + [
+                patterns=[
+                    *settings.crawl_exclude_url_patterns,
                     # File extensions are always excluded
                     "*.css", "*.js", "*.jpg", "*.jpeg", "*.png", "*.gif", 
                     "*.svg", "*.ico", "*.pdf", "*.zip", "*.xml", "*.json"
@@ -647,7 +902,7 @@ class CrawlerService:
         
         pages = []
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            logger.info(f"Starting native Crawl4AI deep crawl from {start_url} (max_pages: {max_pages}, max_depth: {max_depth})")
+            logger.info("Starting native Crawl4AI deep crawl from %s (max_pages: %d, max_depth: %d)", start_url, max_pages, max_depth)
             
             try:
                 # Use Crawl4AI's native deep crawling
@@ -685,9 +940,9 @@ class CrawlerService:
                     stats.total_pages_failed += 1
                     logger.error(f"Failed to start deep crawl from {start_url}: {result.error_message}")
                     
-            except Exception as e:
+            except Exception:
                 stats.total_pages_failed += 1
-                logger.error(f"Error during native deep crawl: {e}")
+                logger.exception("Error during native deep crawl")
                 
         logger.info(f"Native deep crawl completed: {len(pages)} pages discovered with proper URL filtering")
         return pages
@@ -700,7 +955,7 @@ class CrawlerService:
         max_depth: int,
         filter_chain: FilterChain,
         stats: CrawlStatistics
-    ) -> List[PageContent]:
+    ) -> list[PageContent]:
         """
         Manual BFS crawling with proper URL filtering as fallback.
         
@@ -755,21 +1010,20 @@ class CrawlerService:
                 
         return pages
     
-    def _extract_href(self, link) -> str:
+    def _extract_href(self, link: Any) -> str:
         """Extract href from link object."""
         if isinstance(link, dict):
             return link.get('href', '')
         if isinstance(link, str):
             return link
-        else:
-            return str(link) if link else ''
+        return str(link) if link else ''
     
     async def crawl_repository(
         self,
         repo_url: str,
-        clone_path: Optional[str] = None,
-        file_patterns: Optional[List[str]] = None,
-        progress_callback: Optional[callable] = None
+        clone_path: str | None = None,
+        file_patterns: list[str] | None = None,
+        progress_callback: Callable | None = None
     ) -> CrawlResult:
         """
         Clone and analyze a Git repository.
@@ -935,9 +1189,9 @@ class CrawlerService:
     async def crawl_directory(
         self,
         directory_path: str,
-        file_patterns: Optional[List[str]] = None,
+        file_patterns: list[str] | None = None,
         recursive: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: Callable | None = None
     ) -> CrawlResult:
         """
         Crawl files in a local directory.

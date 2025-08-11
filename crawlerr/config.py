@@ -3,7 +3,6 @@ Configuration management for Crawlerr using Pydantic Settings.
 """
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator, ConfigDict
-import os
 from pathlib import Path
 
 # Constants for error messages
@@ -50,6 +49,11 @@ class CrawlerrSettings(BaseSettings):
     embedding_normalize: bool = Field(default=True, alias="EMBEDDING_NORMALIZE")
     embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
     
+    # Chunking Configuration
+    chunk_size: int = Field(default=512, alias="CHUNK_SIZE")
+    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
+    word_to_token_ratio: float = Field(default=1.4, alias="WORD_TO_TOKEN_RATIO")
+    
     # Reranker Configuration
     reranker_model: str = Field(default="tomaarsen/Qwen3-Reranker-0.6B-seq-cls", alias="RERANKER_MODEL")
     reranker_enabled: bool = Field(default=True, alias="RERANKER_ENABLED")
@@ -90,6 +94,22 @@ class CrawlerrSettings(BaseSettings):
     crawl_virtual_scroll: bool = Field(default=True, alias="CRAWL_VIRTUAL_SCROLL")
     crawl_scroll_count: int = Field(default=20, alias="CRAWL_SCROLL_COUNT")
     crawl_memory_threshold: float = Field(default=90.0, alias="CRAWL_MEMORY_THRESHOLD")
+    
+    # RTX 4070 GPU Acceleration Configuration
+    gpu_acceleration: bool = Field(default=True, alias="GPU_ACCELERATION")
+    crawl_gpu_enabled: bool = Field(default=True, alias="CRAWL_GPU_ENABLED")
+    chrome_gpu_flags: str = Field(
+        default="--use-gl=angle --use-angle=vulkan --enable-features=Vulkan --enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist --disable-gpu-sandbox",
+        alias="CHROME_GPU_FLAGS"
+    )
+    chrome_advanced_gpu_flags: str = Field(
+        default="--enable-hardware-overlays --enable-unsafe-webgpu --enable-accelerated-2d-canvas",
+        alias="CHROME_ADVANCED_GPU_FLAGS"
+    )
+    gpu_memory_limit_mb: int = Field(default=5000, alias="GPU_MEMORY_LIMIT_MB")  # Conservative for RTX 4070 (12GB total)
+    gpu_concurrent_browsers: int = Field(default=4, alias="GPU_CONCURRENT_BROWSERS")
+    gpu_health_check_enabled: bool = Field(default=True, alias="GPU_HEALTH_CHECK_ENABLED")
+    gpu_fallback_enabled: bool = Field(default=True, alias="GPU_FALLBACK_ENABLED")
     
     # URL Pattern Exclusions
     crawl_exclude_url_patterns: list[str] = Field(

@@ -261,10 +261,7 @@ class VectorService:
             # Extract results from tuple (results, next_offset)
             results = getattr(query_response, "points", None)
             if results is None:
-                if isinstance(query_response, tuple | list):
-                    results = query_response[0]
-                else:
-                    results = query_response
+                results = query_response[0] if isinstance(query_response, tuple | list) else query_response
             
             # Convert results to SearchMatch objects
             matches = []

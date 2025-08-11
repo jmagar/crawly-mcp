@@ -70,7 +70,6 @@ logs/
 temp/
 tmp/
 *.pid
-.crawlerr-dev.pid
 
 # Crawling data
 crawl_data/

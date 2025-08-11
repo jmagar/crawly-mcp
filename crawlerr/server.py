@@ -10,10 +10,13 @@ import sys
 import warnings
 from pathlib import Path
 from typing import Dict, Any
-import structlog
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
+
+# Suppress specific deprecation warnings from dependencies before any imports
+warnings.filterwarnings("ignore", message=".*@validator.*is deprecated", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message="Support for class-based `config` is deprecated", category=DeprecationWarning)
 
 # Configure logging before importing other modules
 try:
@@ -26,12 +29,8 @@ except ImportError:
     from crawlerr.config import settings
 
 # Set up colorized logging configuration
-def setup_logging():
+def setup_logging() -> None:
     """Configure rich colorized logging for the application."""
-    # Suppress specific deprecation warnings from dependencies
-    warnings.filterwarnings("ignore", message="Support for class-based `config` is deprecated", category=DeprecationWarning)
-    warnings.filterwarnings("ignore", message=".*@validator.*is deprecated", category=DeprecationWarning)
-    
     # Install rich tracebacks for better error display
     install(show_locals=settings.debug)
     
@@ -309,7 +308,7 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
 # Server lifecycle management will be handled by FastMCP automatically
 async def startup_checks():
     """Initialize services and perform startup checks."""
-    logger.info(f"[bold]📋 Starting Crawlerr server v0.1.0[/bold]")
+    logger.info("[bold]📋 Starting Crawlerr server v0.1.0[/bold]")
     logger.info(f"[dim]🐛 Debug mode: {settings.debug} | 🏭 Production: {settings.production}[/dim]")
     
     # Log service endpoints with emojis
@@ -338,13 +337,19 @@ async def startup_checks():
         
         logger.info("[bold green]🎉 Crawlerr server started successfully![/bold green]")
         
+    except ToolError as e:
+        logger.error(f"[red]❌ Critical startup error: {e}[/red]")
+        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
+    except (ConnectionError, TimeoutError) as e:
+        logger.warning(f"[yellow]⚠️  Service connection failed: {e}[/yellow]")
+        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
     except Exception as e:
-        logger.warning(f"[yellow]⚠️  Startup health check failed: {e}[/yellow]")
+        logger.exception(f"[red]💥 Unexpected startup error: {e}[/red]")
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
 
 
 # CLI entry point
-def main():
+def main() -> None:
     """Main entry point for the CLI."""
     try:
         # Rich startup banner

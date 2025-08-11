@@ -57,10 +57,12 @@ Use the built-in `fastmcp` command-line interface for an efficient development c
 
 #### Interactive Debugging (`fastmcp dev`)
 For interactive testing and debugging, use the `dev` command. This runs your server with the MCP Inspector UI, which allows you to call tools and inspect responses.
+
 - **Start the dev server**: `fastmcp dev crawlerr/server.py --with crawl4ai --with qdrant-client --with torch`
 
 #### Running the Server (`fastmcp run`)
 To run the server directly (e.g., for integration testing or production), use the `run` command.
+
 - **Run with HTTP transport**: `fastmcp run crawlerr/server.py --transport http`
 - **Run with dependencies**: `fastmcp run crawlerr/server.py --with crawl4ai --with qdrant-client`
 

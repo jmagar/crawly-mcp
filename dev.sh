@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 MCP_SERVER_NAME="crawlerr-mcp-server"
-PIDFILE="./.crawlerr-dev.pid"
+PIDFILE="./logs/.crawlerr-dev.pid"
 LOGFILE="./logs/dev-server.log"
 
 # Ensure logs directory exists

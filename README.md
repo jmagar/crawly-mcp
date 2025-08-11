@@ -5,7 +5,7 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.0-green.svg)](https://github.com/jlowin/fastmcp)
 [![Crawl4AI](https://img.shields.io/badge/Crawl4AI-0.7.0-orange.svg)](https://github.com/unclecode/crawl4ai)
-[![Qdrant](https://img.shields.io/badge/Qdrant-1.7.4-red.svg)](https://qdrant.tech/)
+[![Qdrant](https://img.shields.io/badge/Qdrant-1.15.1-red.svg)](https://qdrant.tech/)
 
 ## ✨ Features
 
@@ -18,7 +18,7 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 
 ### 🔍 RAG-Powered Semantic Search
 - **🌟 Vector Search** - Lightning-fast semantic similarity using Qwen3-Embedding-0.6B (1024-dim)
-- **🏆 AI Reranking** - Advanced result optimization with Qwen3-Reranker-0.6B-seq-cls for superior relevance
+- **🏆 AI Reranking** - Advanced result optimization with Qwen3-Reranker-0.6B-seq-cls for superior relevance, with configurable fallback to custom algorithms (see [Configuration](#-configuration))
 - **⚡ Hybrid Search** - Combines semantic vectors with keyword-based filtering
 - **🧠 Token-Aware Chunking** - Intelligent 1024-token chunks with semantic boundary detection
 - **📊 Rich Metadata** - Comprehensive source tracking, timestamps, and context preservation
@@ -242,6 +242,7 @@ text-embeddings-inference:
 - **Memory Management**: Adaptive resource allocation based on system capacity
 
 ### Vector Search Intelligence
+
 - **Semantic Similarity**: 1024-dimensional Qwen3 embeddings with native tokenizer compatibility
 - **AI Reranking**: Qwen3-Reranker-0.6B-seq-cls for SOTA relevance optimization
 - **Token-Aware Chunking**: Intelligent 1024-token segments with semantic boundary detection

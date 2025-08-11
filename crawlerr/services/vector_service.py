@@ -247,16 +247,19 @@ class VectorService:
             # Prepare search request
             search_filter = Filter(must=filter_conditions) if filter_conditions else None
             
-            # Perform search
-            results = await self.client.search(
+            # Perform search using modern query_points API
+            query_response = await self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit,
                 score_threshold=score_threshold,
                 query_filter=search_filter,
                 with_payload=True,
                 with_vectors=False  # Don't return vectors to save bandwidth
             )
+            
+            # Extract results from tuple (results, next_offset)
+            results = query_response.points if hasattr(query_response, 'points') else query_response[0] if isinstance(query_response, (tuple, list)) else query_response
             
             # Convert results to SearchMatch objects
             matches = []

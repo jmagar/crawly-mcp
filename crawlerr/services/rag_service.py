@@ -145,7 +145,7 @@ class RagService:
                 'chunk_index': 0,
                 'start_pos': 0,
                 'end_pos': len(text),
-                'token_count': total_tokens,
+                'token_count_estimate': int(total_tokens),
                 'char_count': len(text),
                 'word_count': len(text.split()),
                 **(metadata or {})
@@ -191,7 +191,7 @@ class RagService:
                     'chunk_index': chunk_index,
                     'start_pos': start_char_pos,
                     'end_pos': end_char_pos,
-                    'token_count': end_token_idx - start_token_idx,
+                    'token_count_estimate': int(end_token_idx - start_token_idx),
                     'char_count': len(chunk_text.strip()),
                     'word_count': len(chunk_text.strip().split()),
                     **(metadata or {})
@@ -347,11 +347,11 @@ class RagService:
                     'end_pos': end,
                     'word_count': len(chunk_text.split()),
                     'char_count': len(chunk_text),
-                    'token_count': len(chunk_text.split()) * 1.3 if self.tokenizer is None else (
+                    'token_count_estimate': int(len(chunk_text.split()) * 1.3) if self.tokenizer is None else int(
                         len(self.tokenizer.encode(chunk_text, add_special_tokens=False)) 
                         if self.tokenizer_type == "qwen" 
                         else len(self.tokenizer.encode(chunk_text))
-                    ),  # Accurate token count
+                    ),  # Estimated token count
                     **(metadata or {})
                 }
                 chunks.append(chunk)
@@ -589,13 +589,14 @@ class RagService:
         try:
             if self.reranker_type == "qwen3":
                 return await self._rerank_with_qwen3(query, matches, top_k)
-            elif self.reranker_type == "custom":
+            
+            if self.reranker_type == "custom":
                 return await self._rerank_with_custom_algorithm(query, matches, top_k)
-            else:
-                return matches  # No reranking
+            
+            return matches  # No reranking
                 
         except Exception as e:
-            logger.warning(f"Re-ranking failed, returning original results: {e}")
+            logger.warning("Re-ranking failed, returning original results: %s", e)
             return matches
     
     async def _rerank_with_qwen3(
@@ -618,26 +619,31 @@ class RagService:
                 content = match.document.content[:settings.reranker_max_length]
                 pairs.append([query, content])
             
-            # Get reranking scores from Qwen3 model
-            # Process pairs individually to avoid padding issues
+            # Get reranking scores from Qwen3 model using proper batching
             import asyncio
-            loop = asyncio.get_event_loop()
             
-            scores = []
-            for pair in pairs:
-                score = await loop.run_in_executor(
-                    None, 
-                    lambda p=pair: self.reranker.predict([p])[0]
-                )
-                scores.append(score)
+            # Process all pairs in a single batch for efficiency
+            scores = await asyncio.to_thread(self.reranker.predict, pairs)
             
             # Update match scores with reranker predictions
-            for match, score in zip(matches, scores):
-                # Convert reranker logits to probability-like scores
+            for match, score in zip(matches, scores, strict=True):
+                # Convert reranker logits to normalized probability scores
                 reranker_score = float(score)
-                # Combine original embedding score with reranker score
-                # Weight reranker more heavily as it's more sophisticated
-                match.score = 0.3 * match.score + 0.7 * max(0.0, min(1.0, (reranker_score + 5) / 10))
+                
+                # Apply sigmoid normalization for better score distribution
+                import math
+                normalized_reranker_score = 1.0 / (1.0 + math.exp(-reranker_score))
+                
+                # Combine scores with reranker taking priority (it's query-specific)
+                # Keep original vector similarity but boost with reranker confidence
+                original_score = match.score
+                match.score = 0.4 * match.score + 0.6 * normalized_reranker_score
+                
+                logger.debug(f"Reranking: raw_logit={reranker_score:.4f}, "
+                           f"sigmoid_score={normalized_reranker_score:.4f}, "
+                           f"original_score={original_score:.4f}, "
+                           f"final_score={match.score:.4f}, "
+                           f"reranker_model={settings.reranker_model}")
             
             # Sort by updated scores
             matches.sort(key=lambda m: m.score, reverse=True)
@@ -650,7 +656,7 @@ class RagService:
             return matches
             
         except Exception as e:
-            logger.error(f"Qwen3 reranking failed: {e}")
+            logger.exception(f"Qwen3 reranking failed: {e}")
             # Fallback to custom algorithm if available
             if settings.reranker_fallback_to_custom:
                 logger.info("Falling back to custom reranking algorithm")
@@ -729,7 +735,6 @@ class RagService:
                 "collection": collection_info,
                 "sources": source_stats,
                 "config": {
-                    "chunking_method": getattr(self, 'tokenizer_type', 'character_based'),
                     "chunk_size_tokens": self.chunk_size_tokens if self.tokenizer else None,
                     "chunk_overlap_tokens": self.chunk_overlap_tokens if self.tokenizer else None,
                     "chunk_size_chars": getattr(self, 'chunk_size', None) if not self.tokenizer else None,

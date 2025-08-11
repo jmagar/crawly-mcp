@@ -175,7 +175,7 @@ def register_crawling_tools(mcp: FastMCP):
         
         Args:
             url: Starting URL for the crawl
-            max_pages: Maximum number of pages to crawl (1-100)
+            max_pages: Maximum number of pages to crawl (1-2000)
             max_depth: Maximum depth to crawl (1-5)
             include_patterns: URL patterns to include (optional)
             exclude_patterns: URL patterns to exclude (optional)
@@ -188,8 +188,8 @@ def register_crawling_tools(mcp: FastMCP):
         await ctx.info(f"Starting crawl of {url} (max_pages: {max_pages}, max_depth: {max_depth})")
         
         # Validate parameters
-        if max_pages > 100:
-            raise ToolError("max_pages cannot exceed 100")
+        if max_pages > 2000:
+            raise ToolError("max_pages cannot exceed 2000")
         if max_depth > 5:
             raise ToolError("max_depth cannot exceed 5")
         

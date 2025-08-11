@@ -7,7 +7,6 @@ import time
 import uuid
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
-import tiktoken
 from ..config import settings
 from ..models.rag_models import (
     RagQuery, RagResult, SearchMatch, DocumentChunk, EmbeddingResult
@@ -40,17 +39,17 @@ class RagService:
             from transformers import AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(settings.tei_model)
             self.tokenizer_type = "qwen"
-            logger.info(f"Using Qwen tokenizer for {settings.tei_model}")
-        except Exception as e:
-            logger.warning(f"Failed to load Qwen tokenizer: {e}. Trying tiktoken fallback.")
+            logger.info("Using Qwen tokenizer for %s", settings.tei_model)
+        except (ImportError, OSError, ValueError) as e:
+            logger.warning("Failed to load Qwen tokenizer: %s. Trying tiktoken fallback.", e)
             try:
                 # Fallback to cl100k_base encoding for general compatibility
                 import tiktoken
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
                 self.tokenizer_type = "tiktoken"
                 logger.info("Using tiktoken cl100k_base encoding as fallback")
-            except Exception as e2:
-                logger.warning(f"Failed to load tiktoken: {e2}. Using character-based chunking.")
+            except ImportError as e2:
+                logger.warning("Failed to import tiktoken: %s. Using character-based chunking.", e2)
                 self.tokenizer = None
                 self.tokenizer_type = "character"
                 # Fallback to character-based for backward compatibility
@@ -66,15 +65,23 @@ class RagService:
                 from sentence_transformers import CrossEncoder
                 self.reranker = CrossEncoder(settings.reranker_model)
                 self.reranker_type = "qwen3"
-                logger.info(f"Using Qwen3 reranker: {settings.reranker_model}")
-            except Exception as e:
-                logger.warning(f"Failed to load Qwen3 reranker: {e}. Using custom reranking fallback.")
+                logger.info("Using Qwen3 reranker: %s", settings.reranker_model)
+            except (ImportError, OSError) as e:
+                logger.warning("Failed to import/load Qwen3 reranker: %s", e)
                 if settings.reranker_fallback_to_custom:
                     self.reranker_type = "custom"
                     logger.info("Using custom reranking algorithm as fallback")
                 else:
                     self.reranker_type = "none"
                     logger.info("Reranking disabled due to model loading failure")
+            except Exception as e:
+                logger.exception("Unexpected error during Qwen3 reranker initialization: %s", e)
+                if settings.reranker_fallback_to_custom:
+                    self.reranker_type = "custom"
+                    logger.info("Using custom reranking algorithm as fallback")
+                else:
+                    self.reranker_type = "none"
+                    logger.info("Reranking disabled due to unexpected error")
     
     async def __aenter__(self):
         """Async context manager entry."""

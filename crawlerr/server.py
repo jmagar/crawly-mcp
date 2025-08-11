@@ -4,19 +4,20 @@ Crawlerr FastMCP Server - RAG-enabled web crawling with Crawl4AI and Qdrant.
 This server provides comprehensive web crawling capabilities with automatic RAG indexing
 using Crawl4AI 0.7.0, Qdrant vector database, and HF Text Embeddings Inference.
 """
+import warnings
+
+# Suppress specific deprecation warnings from external dependencies FIRST
+warnings.filterwarnings("ignore", message=".*@validator.*is deprecated", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message="Support for class-based.*config.*is deprecated.*", category=DeprecationWarning)
+
 import asyncio
 import logging
 import sys
-import warnings
 from pathlib import Path
 from typing import Dict, Any
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
-
-# Suppress specific deprecation warnings from dependencies before any imports
-warnings.filterwarnings("ignore", message=".*@validator.*is deprecated", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message="Support for class-based `config` is deprecated", category=DeprecationWarning)
 
 # Configure logging before importing other modules
 try:

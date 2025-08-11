@@ -1,6 +1,11 @@
 """
 Service for web crawling operations using Crawl4AI 0.7.0.
 """
+import warnings
+
+# Suppress Crawl4AI Pydantic v1 deprecation warnings before import
+warnings.filterwarnings("ignore", message="Support for class-based.*config.*is deprecated.*", category=DeprecationWarning)
+
 import asyncio
 import logging
 import time

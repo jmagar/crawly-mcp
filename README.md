@@ -18,9 +18,10 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 
 ### 🔍 RAG-Powered Semantic Search
 - **🌟 Vector Search** - Lightning-fast semantic similarity using Qwen3-Embedding-0.6B (1024-dim)
+- **🏆 AI Reranking** - Advanced result optimization with Qwen3-Reranker-0.6B for superior relevance
 - **⚡ Hybrid Search** - Combines semantic vectors with keyword-based filtering
+- **🧠 Token-Aware Chunking** - Intelligent 1024-token chunks with semantic boundary detection
 - **📊 Rich Metadata** - Comprehensive source tracking, timestamps, and context preservation
-- **🎯 Query Enhancement** - Intelligent query expansion for improved search results
 
 ### 🏗️ Modern Architecture
 - **🔥 FastMCP 2.0** - Streamable HTTP transport with real-time progress updates
@@ -180,6 +181,8 @@ graph TB
 | **Web Crawler** | Crawl4AI 0.7.0 | AI-optimized web crawling | 50+ pages/min |
 | **Vector DB** | Qdrant 1.7.4 | High-performance vector storage | <100ms queries |
 | **Embeddings** | Qwen3-Embedding-0.6B | Multilingual text embeddings | 1024-dim vectors |
+| **Reranker** | Qwen3-Reranker-0.6B | AI-powered result optimization | SOTA relevance |
+| **Tokenizer** | Qwen3 Native + Fallbacks | Perfect model compatibility | Qwen > tiktoken > chars |
 | **Inference** | HF TEI | GPU-accelerated embedding generation | 128 concurrent |
 | **Orchestration** | Docker Compose | Service deployment | One-command setup |
 
@@ -239,9 +242,10 @@ text-embeddings-inference:
 - **Memory Management**: Adaptive resource allocation based on system capacity
 
 ### Vector Search Intelligence
-- **Semantic Similarity**: 1024-dimensional Qwen3 embeddings
-- **Hybrid Search**: Vector + keyword combination
-- **Reranking**: Advanced result optimization
+- **Semantic Similarity**: 1024-dimensional Qwen3 embeddings with native tokenizer compatibility
+- **AI Reranking**: Qwen3-Reranker-0.6B for SOTA relevance optimization
+- **Token-Aware Chunking**: Intelligent 1024-token segments with semantic boundary detection
+- **Hybrid Search**: Vector + keyword combination with smart fallbacks
 - **Metadata Filtering**: Rich contextual search filters
 
 ### Production Ready

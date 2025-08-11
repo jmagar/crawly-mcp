@@ -48,6 +48,13 @@ class CrawlerrSettings(BaseSettings):
     embedding_normalize: bool = Field(default=True, env="EMBEDDING_NORMALIZE")
     embedding_max_retries: int = Field(default=2, env="EMBEDDING_MAX_RETRIES")
     
+    # Reranker Configuration
+    reranker_model: str = Field(default="Qwen/Qwen3-Reranker-0.6B", env="RERANKER_MODEL")
+    reranker_enabled: bool = Field(default=True, env="RERANKER_ENABLED")
+    reranker_top_k: int = Field(default=10, env="RERANKER_TOP_K")
+    reranker_max_length: int = Field(default=512, env="RERANKER_MAX_LENGTH")
+    reranker_fallback_to_custom: bool = Field(default=True, env="RERANKER_FALLBACK_TO_CUSTOM")
+    
     # Crawling Configuration
     crawl_headless: bool = Field(default=True, env="CRAWL_HEADLESS")
     crawl_browser: str = Field(default="chromium", env="CRAWL_BROWSER")

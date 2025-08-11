@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime
+import tiktoken
 from ..config import settings
 from ..models.rag_models import (
     RagQuery, RagResult, SearchMatch, DocumentChunk, EmbeddingResult
@@ -28,8 +29,52 @@ class RagService:
     def __init__(self):
         self.embedding_service = EmbeddingService()
         self.vector_service = VectorService()
-        self.chunk_size = 1000  # Characters per chunk
-        self.chunk_overlap = 200  # Overlap between chunks
+        
+        # Token-based chunking configuration
+        self.chunk_size_tokens = 1024  # Tokens per chunk (optimal for embeddings)
+        self.chunk_overlap_tokens = 100  # Token overlap between chunks (10% of chunk size)
+        
+        # Initialize tokenizer for the embedding model
+        try:
+            # Try to use Qwen's tokenizer first (matches our embedding model)
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(settings.tei_model)
+            self.tokenizer_type = "qwen"
+            logger.info(f"Using Qwen tokenizer for {settings.tei_model}")
+        except Exception as e:
+            logger.warning(f"Failed to load Qwen tokenizer: {e}. Trying tiktoken fallback.")
+            try:
+                # Fallback to cl100k_base encoding for general compatibility
+                import tiktoken
+                self.tokenizer = tiktoken.get_encoding("cl100k_base")
+                self.tokenizer_type = "tiktoken"
+                logger.info("Using tiktoken cl100k_base encoding as fallback")
+            except Exception as e2:
+                logger.warning(f"Failed to load tiktoken: {e2}. Using character-based chunking.")
+                self.tokenizer = None
+                self.tokenizer_type = "character"
+                # Fallback to character-based for backward compatibility
+                self.chunk_size = 1000  # Characters per chunk
+                self.chunk_overlap = 200  # Overlap between chunks
+        
+        # Initialize Qwen3 reranker
+        self.reranker = None
+        self.reranker_type = "none"
+        
+        if settings.reranker_enabled:
+            try:
+                from sentence_transformers import CrossEncoder
+                self.reranker = CrossEncoder(settings.reranker_model)
+                self.reranker_type = "qwen3"
+                logger.info(f"Using Qwen3 reranker: {settings.reranker_model}")
+            except Exception as e:
+                logger.warning(f"Failed to load Qwen3 reranker: {e}. Using custom reranking fallback.")
+                if settings.reranker_fallback_to_custom:
+                    self.reranker_type = "custom"
+                    logger.info("Using custom reranking algorithm as fallback")
+                else:
+                    self.reranker_type = "none"
+                    logger.info("Reranking disabled due to model loading failure")
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -61,7 +106,7 @@ class RagService:
     
     def chunk_text(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
-        Split text into overlapping chunks for embedding.
+        Split text into overlapping chunks for embedding using token-based chunking with semantic awareness.
         
         Args:
             text: Text to chunk
@@ -72,6 +117,201 @@ class RagService:
         """
         if not text.strip():
             return []
+        
+        # Fallback to character-based if tokenizer unavailable
+        if self.tokenizer is None:
+            return self._chunk_text_character_based(text, metadata)
+        
+        return self._chunk_text_token_based(text, metadata)
+    
+    def _chunk_text_token_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Token-based chunking with semantic awareness.
+        """
+        chunks = []
+        chunk_index = 0
+        
+        # Tokenize the entire text based on tokenizer type
+        if self.tokenizer_type == "qwen":
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        else:  # tiktoken
+            tokens = self.tokenizer.encode(text)
+        total_tokens = len(tokens)
+        
+        if total_tokens <= self.chunk_size_tokens:
+            # Text fits in single chunk
+            chunk = {
+                'text': text.strip(),
+                'chunk_index': 0,
+                'start_pos': 0,
+                'end_pos': len(text),
+                'token_count': total_tokens,
+                'char_count': len(text),
+                'word_count': len(text.split()),
+                **(metadata or {})
+            }
+            return [chunk]
+        
+        start_token_idx = 0
+        
+        while start_token_idx < total_tokens:
+            end_token_idx = min(start_token_idx + self.chunk_size_tokens, total_tokens)
+            
+            # Extract tokens for this chunk
+            chunk_tokens = tokens[start_token_idx:end_token_idx]
+            if self.tokenizer_type == "qwen":
+                chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+            else:  # tiktoken
+                chunk_text = self.tokenizer.decode(chunk_tokens)
+            
+            # Apply semantic-aware boundary detection
+            if end_token_idx < total_tokens:  # Not the last chunk
+                chunk_text, adjusted_end_idx = self._find_semantic_boundary(
+                    text, chunk_text, start_token_idx, end_token_idx, tokens
+                )
+                end_token_idx = adjusted_end_idx
+            
+            if chunk_text.strip():
+                # Calculate positions in original text
+                if start_token_idx > 0:
+                    if self.tokenizer_type == "qwen":
+                        start_char_pos = len(self.tokenizer.decode(tokens[:start_token_idx], skip_special_tokens=True))
+                    else:  # tiktoken
+                        start_char_pos = len(self.tokenizer.decode(tokens[:start_token_idx]))
+                else:
+                    start_char_pos = 0
+                    
+                if self.tokenizer_type == "qwen":
+                    end_char_pos = len(self.tokenizer.decode(tokens[:end_token_idx], skip_special_tokens=True))
+                else:  # tiktoken
+                    end_char_pos = len(self.tokenizer.decode(tokens[:end_token_idx]))
+                
+                chunk = {
+                    'text': chunk_text.strip(),
+                    'chunk_index': chunk_index,
+                    'start_pos': start_char_pos,
+                    'end_pos': end_char_pos,
+                    'token_count': end_token_idx - start_token_idx,
+                    'char_count': len(chunk_text.strip()),
+                    'word_count': len(chunk_text.strip().split()),
+                    **(metadata or {})
+                }
+                chunks.append(chunk)
+                chunk_index += 1
+            
+            # Move to next chunk with overlap
+            # Only apply overlap if we have more content to process
+            if end_token_idx < total_tokens:
+                start_token_idx = end_token_idx - self.chunk_overlap_tokens
+                # Ensure we always make progress (avoid infinite loops)
+                if start_token_idx <= chunk_index * 10:  # Safety check
+                    start_token_idx = end_token_idx
+            else:
+                break  # We've processed all tokens
+        
+        return chunks
+    
+    def _find_semantic_boundary(
+        self, 
+        full_text: str, 
+        chunk_text: str, 
+        start_token_idx: int, 
+        end_token_idx: int, 
+        tokens: List[int]
+    ) -> Tuple[str, int]:
+        """
+        Find optimal semantic boundary for chunk splitting.
+        
+        Returns:
+            Tuple of (adjusted_chunk_text, adjusted_end_token_idx)
+        """
+        # Convert back to character positions to work with text
+        if start_token_idx > 0:
+            if self.tokenizer_type == "qwen":
+                start_char = len(self.tokenizer.decode(tokens[:start_token_idx], skip_special_tokens=True))
+            else:  # tiktoken
+                start_char = len(self.tokenizer.decode(tokens[:start_token_idx]))
+        else:
+            start_char = 0
+            
+        if self.tokenizer_type == "qwen":
+            end_char = len(self.tokenizer.decode(tokens[:end_token_idx], skip_special_tokens=True))
+        else:  # tiktoken
+            end_char = len(self.tokenizer.decode(tokens[:end_token_idx]))
+        
+        # Look for good break points in order of preference
+        search_text = full_text[start_char:min(end_char + 200, len(full_text))]
+        ideal_end = end_char - start_char
+        
+        # 1. Paragraph breaks (double newlines)
+        paragraph_breaks = [i for i, char in enumerate(search_text) if search_text[i:i+2] == '\n\n']
+        suitable_paragraph_breaks = [b for b in paragraph_breaks if ideal_end - 100 <= b <= ideal_end + 100]
+        
+        if suitable_paragraph_breaks:
+            best_break = max(suitable_paragraph_breaks)
+            adjusted_text = search_text[:best_break].strip()
+            # Convert back to token index
+            if self.tokenizer_type == "qwen":
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
+            else:  # tiktoken
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
+            return adjusted_text, start_token_idx + len(adjusted_tokens)
+        
+        # 2. Sentence endings
+        sentence_patterns = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
+        sentence_breaks = []
+        for pattern in sentence_patterns:
+            sentence_breaks.extend([
+                i + len(pattern) for i in range(len(search_text) - len(pattern)) 
+                if search_text[i:i+len(pattern)] == pattern
+            ])
+        
+        suitable_sentence_breaks = [b for b in sentence_breaks if ideal_end - 50 <= b <= ideal_end + 50]
+        if suitable_sentence_breaks:
+            best_break = max(suitable_sentence_breaks)
+            adjusted_text = search_text[:best_break].strip()
+            if self.tokenizer_type == "qwen":
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
+            else:  # tiktoken
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
+            return adjusted_text, start_token_idx + len(adjusted_tokens)
+        
+        # 3. Line breaks
+        line_breaks = [i + 1 for i, char in enumerate(search_text) if char == '\n']
+        suitable_line_breaks = [b for b in line_breaks if ideal_end - 30 <= b <= ideal_end + 30]
+        
+        if suitable_line_breaks:
+            best_break = max(suitable_line_breaks)
+            adjusted_text = search_text[:best_break].strip()
+            if self.tokenizer_type == "qwen":
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
+            else:  # tiktoken
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
+            return adjusted_text, start_token_idx + len(adjusted_tokens)
+        
+        # 4. Word boundaries (spaces)
+        word_breaks = [i + 1 for i, char in enumerate(search_text) if char == ' ']
+        suitable_word_breaks = [b for b in word_breaks if ideal_end - 20 <= b <= ideal_end + 20]
+        
+        if suitable_word_breaks:
+            best_break = max(suitable_word_breaks)
+            adjusted_text = search_text[:best_break].strip()
+            if self.tokenizer_type == "qwen":
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break], add_special_tokens=False)
+            else:  # tiktoken
+                adjusted_tokens = self.tokenizer.encode(full_text[start_char:start_char + best_break])
+            return adjusted_text, start_token_idx + len(adjusted_tokens)
+        
+        # Fallback: use original chunk
+        return chunk_text, end_token_idx
+    
+    def _chunk_text_character_based(self, text: str, metadata: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Fallback character-based chunking for backward compatibility.
+        """
+        if not hasattr(self, 'chunk_size'):
+            self.chunk_size = 1000
+            self.chunk_overlap = 200
         
         chunks = []
         text_length = len(text)
@@ -107,6 +347,11 @@ class RagService:
                     'end_pos': end,
                     'word_count': len(chunk_text.split()),
                     'char_count': len(chunk_text),
+                    'token_count': len(chunk_text.split()) * 1.3 if self.tokenizer is None else (
+                        len(self.tokenizer.encode(chunk_text, add_special_tokens=False)) 
+                        if self.tokenizer_type == "qwen" 
+                        else len(self.tokenizer.encode(chunk_text))
+                    ),  # Accurate token count
                     **(metadata or {})
                 }
                 chunks.append(chunk)
@@ -280,7 +525,7 @@ class RagService:
             
             # Apply re-ranking if requested
             rerank_time = None
-            if rerank and len(search_matches) > 1:
+            if rerank and len(search_matches) > 1 and self.reranker_type != "none":
                 rerank_start = time.time()
                 search_matches = await self._rerank_results(query.query, search_matches)
                 rerank_time = time.time() - rerank_start
@@ -328,7 +573,7 @@ class RagService:
         top_k: Optional[int] = None
     ) -> List[SearchMatch]:
         """
-        Re-rank search results using additional similarity metrics.
+        Re-rank search results using Qwen3 reranker or custom algorithm.
         
         Args:
             query: Original query text
@@ -341,6 +586,86 @@ class RagService:
         if not matches:
             return matches
         
+        try:
+            if self.reranker_type == "qwen3":
+                return await self._rerank_with_qwen3(query, matches, top_k)
+            elif self.reranker_type == "custom":
+                return await self._rerank_with_custom_algorithm(query, matches, top_k)
+            else:
+                return matches  # No reranking
+                
+        except Exception as e:
+            logger.warning(f"Re-ranking failed, returning original results: {e}")
+            return matches
+    
+    async def _rerank_with_qwen3(
+        self,
+        query: str,
+        matches: List[SearchMatch],
+        top_k: Optional[int] = None
+    ) -> List[SearchMatch]:
+        """
+        Re-rank using Qwen3 CrossEncoder reranker.
+        """
+        if not self.reranker or not matches:
+            return matches
+        
+        try:
+            # Prepare query-document pairs for the reranker
+            pairs = []
+            for match in matches:
+                # Truncate content to reranker max length
+                content = match.document.content[:settings.reranker_max_length]
+                pairs.append([query, content])
+            
+            # Get reranking scores from Qwen3 model
+            # Process pairs individually to avoid padding issues
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            scores = []
+            for pair in pairs:
+                score = await loop.run_in_executor(
+                    None, 
+                    lambda p=pair: self.reranker.predict([p])[0]
+                )
+                scores.append(score)
+            
+            # Update match scores with reranker predictions
+            for match, score in zip(matches, scores):
+                # Convert reranker logits to probability-like scores
+                reranker_score = float(score)
+                # Combine original embedding score with reranker score
+                # Weight reranker more heavily as it's more sophisticated
+                match.score = 0.3 * match.score + 0.7 * max(0.0, min(1.0, (reranker_score + 5) / 10))
+            
+            # Sort by updated scores
+            matches.sort(key=lambda m: m.score, reverse=True)
+            
+            # Return top_k if specified
+            if top_k and top_k < len(matches):
+                matches = matches[:top_k]
+            
+            logger.debug(f"Qwen3 reranked {len(matches)} results")
+            return matches
+            
+        except Exception as e:
+            logger.error(f"Qwen3 reranking failed: {e}")
+            # Fallback to custom algorithm if available
+            if settings.reranker_fallback_to_custom:
+                logger.info("Falling back to custom reranking algorithm")
+                return await self._rerank_with_custom_algorithm(query, matches, top_k)
+            return matches
+    
+    async def _rerank_with_custom_algorithm(
+        self,
+        query: str,
+        matches: List[SearchMatch],
+        top_k: Optional[int] = None
+    ) -> List[SearchMatch]:
+        """
+        Re-rank using custom hybrid scoring algorithm (original implementation).
+        """
         try:
             # Simple re-ranking based on keyword overlap and length
             query_words = set(query.lower().split())
@@ -377,13 +702,14 @@ class RagService:
             matches.sort(key=lambda m: m.score, reverse=True)
             
             # Return top_k if specified
-            if top_k:
+            if top_k and top_k < len(matches):
                 matches = matches[:top_k]
             
+            logger.debug(f"Custom algorithm reranked {len(matches)} results")
             return matches
             
         except Exception as e:
-            logger.warning(f"Re-ranking failed, returning original results: {e}")
+            logger.warning(f"Custom reranking failed: {e}")
             return matches
     
     async def get_stats(self) -> Dict[str, Any]:
@@ -403,8 +729,15 @@ class RagService:
                 "collection": collection_info,
                 "sources": source_stats,
                 "config": {
-                    "chunk_size": self.chunk_size,
-                    "chunk_overlap": self.chunk_overlap,
+                    "chunking_method": getattr(self, 'tokenizer_type', 'character_based'),
+                    "chunk_size_tokens": self.chunk_size_tokens if self.tokenizer else None,
+                    "chunk_overlap_tokens": self.chunk_overlap_tokens if self.tokenizer else None,
+                    "chunk_size_chars": getattr(self, 'chunk_size', None) if not self.tokenizer else None,
+                    "chunk_overlap_chars": getattr(self, 'chunk_overlap', None) if not self.tokenizer else None,
+                    "tokenizer_type": getattr(self, 'tokenizer_type', 'character_based'),
+                    "reranker_type": getattr(self, 'reranker_type', 'none'),
+                    "reranker_model": settings.reranker_model if self.reranker_type == "qwen3" else None,
+                    "reranker_enabled": settings.reranker_enabled,
                     "embedding_model": settings.tei_model,
                     "vector_dimension": settings.qdrant_vector_size,
                     "distance_metric": settings.qdrant_distance

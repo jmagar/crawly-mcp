@@ -179,6 +179,8 @@ start_mcp_server() {
     log_info "Starting Crawlerr MCP server directly..."
     
     # Run the server directly with Python to respect .env configuration
+    # Unset conflicting VIRTUAL_ENV to prevent uv warnings
+    unset VIRTUAL_ENV
     nohup uv run python -m crawlerr.server \
         > "$LOGFILE" 2>&1 &
     

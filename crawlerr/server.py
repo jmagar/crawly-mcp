@@ -7,8 +7,13 @@ using Crawl4AI 0.7.0, Qdrant vector database, and HF Text Embeddings Inference.
 import asyncio
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import Dict, Any
+import structlog
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.traceback import install
 
 # Configure logging before importing other modules
 try:
@@ -20,16 +25,36 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from crawlerr.config import settings
 
-# Set up logging configuration
+# Set up colorized logging configuration
 def setup_logging():
-    """Configure logging for the application."""
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    """Configure rich colorized logging for the application."""
+    # Suppress specific deprecation warnings from dependencies
+    warnings.filterwarnings("ignore", message="Support for class-based `config` is deprecated", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", message=".*@validator.*is deprecated", category=DeprecationWarning)
+    
+    # Install rich tracebacks for better error display
+    install(show_locals=settings.debug)
+    
+    # Create rich console
+    console = Console(force_terminal=True, width=120)
+    
+    # Configure rich handler with colors
+    rich_handler = RichHandler(
+        console=console,
+        show_path=settings.debug,
+        show_time=True,
+        rich_tracebacks=True,
+        tracebacks_show_locals=settings.debug,
+        markup=True,
+        log_time_format="[%H:%M:%S]"
+    )
     
     # Configure root logger
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper()),
-        format=log_format,
-        datefmt="%Y-%m-%d %H:%M:%S"
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[rich_handler]
     )
     
     # Create file handler if specified
@@ -37,11 +62,12 @@ def setup_logging():
         log_path = Path(settings.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Add file handler without colors
         file_handler = logging.FileHandler(log_path)
-        file_handler.setLevel(getattr(logging, settings.log_level.upper()))
-        file_handler.setFormatter(logging.Formatter(log_format))
-        
-        # Add to root logger
+        file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
         logging.getLogger().addHandler(file_handler)
     
     # Set specific log levels for noisy libraries
@@ -283,45 +309,55 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
 # Server lifecycle management will be handled by FastMCP automatically
 async def startup_checks():
     """Initialize services and perform startup checks."""
-    logger.info(f"Starting Crawlerr server v0.1.0")
-    logger.info(f"Debug mode: {settings.debug}, Production: {settings.production}")
+    logger.info(f"[bold]📋 Starting Crawlerr server v0.1.0[/bold]")
+    logger.info(f"[dim]🐛 Debug mode: {settings.debug} | 🏭 Production: {settings.production}[/dim]")
     
-    # Log service endpoints
-    logger.info(f"Qdrant endpoint: {settings.qdrant_url}")
-    logger.info(f"TEI endpoint: {settings.tei_url}")
-    logger.info(f"TEI model: {settings.tei_model}")
+    # Log service endpoints with emojis
+    logger.info(f"[blue]🗂️  Qdrant endpoint: {settings.qdrant_url}[/blue]")
+    logger.info(f"[purple]🤖 TEI endpoint: {settings.tei_url}[/purple]")
+    logger.info(f"[magenta]🧠 TEI model: {settings.tei_model}[/magenta]")
+    logger.info(f"[yellow]🔄 Reranker model: {settings.reranker_model}[/yellow]")
+    logger.info(f"[red]⏱️  Crawl timeout: {settings.crawler_timeout}s[/red]")
     
     # Perform basic health check
     try:
         # Check if services are reachable
         async with EmbeddingService() as embedding_service:
             embedding_healthy = await embedding_service.health_check()
-            logger.info(f"Embedding service health: {'✓' if embedding_healthy else '✗'}")
+            status = "[green]✅[/green]" if embedding_healthy else "[red]❌[/red]"
+            logger.info(f"🚀 Embedding service health: {status}")
         
         async with VectorService() as vector_service:
             vector_healthy = await vector_service.health_check()
             # Ensure collection exists
             collection_created = await vector_service.ensure_collection()
-            logger.info(f"Vector service health: {'✓' if vector_healthy else '✗'}")
-            logger.info(f"Vector collection ready: {'✓' if collection_created else '✗'}")
+            v_status = "[green]✅[/green]" if vector_healthy else "[red]❌[/red]"
+            c_status = "[green]✅[/green]" if collection_created else "[red]❌[/red]"
+            logger.info(f"🗄️  Vector service health: {v_status}")
+            logger.info(f"📚 Vector collection ready: {c_status}")
         
-        logger.info("Crawlerr server started successfully ✓")
+        logger.info("[bold green]🎉 Crawlerr server started successfully![/bold green]")
         
     except Exception as e:
-        logger.warning(f"Startup health check failed: {e}")
-        logger.info("Server started but some services may be unavailable")
+        logger.warning(f"[yellow]⚠️  Startup health check failed: {e}[/yellow]")
+        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
 
 
 # CLI entry point
 def main():
     """Main entry point for the CLI."""
     try:
+        # Rich startup banner
+        console = Console()
+        console.print("\n[bold blue]🕷️  Crawly MCP Server[/bold blue]", style="bold blue")
+        console.print("[dim]RAG-Enabled Web Crawling with Qwen3 Intelligence[/dim]\n")
+        
         # Run startup checks
-        logger.info("Starting Crawlerr FastMCP server...")
+        logger.info("[green]🚀 Starting Crawlerr FastMCP server...[/green]")
         asyncio.run(startup_checks())
         
         # Start the FastMCP server with HTTP transport
-        logger.info(f"Starting FastMCP server on {settings.server_host}:{settings.server_port}")
+        logger.info(f"[cyan]🌐 Starting FastMCP server on {settings.server_host}:{settings.server_port}[/cyan]")
         
         # Import uvicorn for server
         import uvicorn

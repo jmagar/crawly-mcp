@@ -26,7 +26,7 @@ dependencies = [
     "crawl4ai>=0.7.2",
     "httpx>=0.25.0",
     # Vector database
-    "qdrant-client>=1.7.0",
+    "qdrant-client>=1.15.1",
     # Data processing
     "pydantic>=2.5.0",
     # Logging and monitoring

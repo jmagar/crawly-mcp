@@ -3,7 +3,7 @@ Configuration management for Crawlerr using Pydantic Settings.
 """
 from typing import Optional, List
 from pydantic_settings import BaseSettings
-from pydantic import Field, validator
+from pydantic import Field, field_validator, ConfigDict
 import os
 from pathlib import Path
 
@@ -49,7 +49,7 @@ class CrawlerrSettings(BaseSettings):
     embedding_max_retries: int = Field(default=2, env="EMBEDDING_MAX_RETRIES")
     
     # Reranker Configuration
-    reranker_model: str = Field(default="Qwen/Qwen3-Reranker-0.6B", env="RERANKER_MODEL")
+    reranker_model: str = Field(default="tomaarsen/Qwen3-Reranker-0.6B-seq-cls", env="RERANKER_MODEL")
     reranker_enabled: bool = Field(default=True, env="RERANKER_ENABLED")
     reranker_top_k: int = Field(default=10, env="RERANKER_TOP_K")
     reranker_max_length: int = Field(default=512, env="RERANKER_MAX_LENGTH")
@@ -62,7 +62,7 @@ class CrawlerrSettings(BaseSettings):
     crawl_max_depth: int = Field(default=3, env="CRAWL_MAX_DEPTH")
     max_concurrent_crawls: int = Field(default=25, env="MAX_CONCURRENT_CRAWLS")
     crawler_delay: float = Field(default=0.1, env="CRAWLER_DELAY")
-    crawler_timeout: float = Field(default=30.0, env="CRAWLER_TIMEOUT")
+    crawler_timeout: float = Field(default=15.0, env="CRAWLER_TIMEOUT")
     crawl_min_words: int = Field(default=100, env="CRAWL_MIN_WORDS")
     crawl_remove_overlays: bool = Field(default=True, env="CRAWL_REMOVE_OVERLAYS")
     crawl_extract_media: bool = Field(default=False, env="CRAWL_EXTRACT_MEDIA")
@@ -95,17 +95,19 @@ class CrawlerrSettings(BaseSettings):
             return ["*"]
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
     
-    @validator("log_file", pre=True)
+    @field_validator("log_file", mode="before")
+    @classmethod
     def create_log_directory(cls, v):
         if v:
             log_path = Path(v)
             log_path.parent.mkdir(parents=True, exist_ok=True)
         return v
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False
+    )
 
 
 # Global settings instance

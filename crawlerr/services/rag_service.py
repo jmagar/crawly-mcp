@@ -35,21 +35,25 @@ class RagService:
         
         # Initialize tokenizer for the embedding model
         try:
-            # Try to use Qwen's tokenizer first (matches our embedding model)
             from transformers import AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(settings.tei_model)
-            self.tokenizer_type = "qwen"
-            logger.info("Using Qwen tokenizer for %s", settings.tei_model)
-        except (ImportError, OSError, ValueError) as e:
-            logger.warning("Failed to load Qwen tokenizer: %s. Trying tiktoken fallback.", e)
+        except ImportError as e:
+            logger.warning("transformers not installed. Falling back to tiktoken: %s", e)
+        else:
             try:
-                # Fallback to cl100k_base encoding for general compatibility
+                self.tokenizer = AutoTokenizer.from_pretrained(settings.tei_model)
+                self.tokenizer_type = "qwen"
+                logger.info("Using Qwen tokenizer for %s", settings.tei_model)
+            except (OSError, ValueError) as e:
+                logger.warning("Failed to load Qwen tokenizer for %s: %s", settings.tei_model, e)
+
+        if not getattr(self, "tokenizer", None):
+            try:
                 import tiktoken
                 self.tokenizer = tiktoken.get_encoding("cl100k_base")
                 self.tokenizer_type = "tiktoken"
                 logger.info("Using tiktoken cl100k_base encoding as fallback")
             except ImportError as e2:
-                logger.warning("Failed to import tiktoken: %s. Using character-based chunking.", e2)
+                logger.warning("Failed to load tiktoken fallback: %s; using character-based chunking", e2)
                 self.tokenizer = None
                 self.tokenizer_type = "character"
                 # Fallback to character-based for backward compatibility
@@ -63,25 +67,21 @@ class RagService:
         if settings.reranker_enabled:
             try:
                 from sentence_transformers import CrossEncoder
-                self.reranker = CrossEncoder(settings.reranker_model)
-                self.reranker_type = "qwen3"
-                logger.info("Using Qwen3 reranker: %s", settings.reranker_model)
-            except (ImportError, OSError) as e:
-                logger.warning("Failed to import/load Qwen3 reranker: %s", e)
-                if settings.reranker_fallback_to_custom:
-                    self.reranker_type = "custom"
-                    logger.info("Using custom reranking algorithm as fallback")
-                else:
-                    self.reranker_type = "none"
-                    logger.info("Reranking disabled due to model loading failure")
-            except Exception as e:
-                logger.exception("Unexpected error during Qwen3 reranker initialization: %s", e)
-                if settings.reranker_fallback_to_custom:
-                    self.reranker_type = "custom"
-                    logger.info("Using custom reranking algorithm as fallback")
-                else:
-                    self.reranker_type = "none"
-                    logger.info("Reranking disabled due to unexpected error")
+            except ImportError as e:
+                logger.warning("sentence-transformers not installed. Reranking disabled: %s", e)
+            else:
+                try:
+                    self.reranker = CrossEncoder(settings.reranker_model)
+                    self.reranker_type = "qwen3"
+                    logger.info("Using Qwen3 reranker: %s", settings.reranker_model)
+                except (OSError, ValueError) as e:
+                    logger.warning("Failed to load Qwen3 reranker %s: %s", settings.reranker_model, e)
+                    if settings.reranker_fallback_to_custom:
+                        self.reranker_type = "custom"
+                        logger.info("Using custom reranking algorithm as fallback")
+                    else:
+                        self.reranker_type = "none"
+                        logger.info("Reranking disabled due to model loading failure")
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -206,15 +206,13 @@ class RagService:
                 chunks.append(chunk)
                 chunk_index += 1
             
-            # Move to next chunk with overlap
-            # Only apply overlap if we have more content to process
             if end_token_idx < total_tokens:
-                start_token_idx = end_token_idx - self.chunk_overlap_tokens
-                # Ensure we always make progress (avoid infinite loops)
-                if start_token_idx <= chunk_index * 10:  # Safety check
-                    start_token_idx = end_token_idx
+                next_start = max(0, end_token_idx - self.chunk_overlap_tokens)
+                if next_start <= start_token_idx:
+                    next_start = end_token_idx
+                start_token_idx = next_start
             else:
-                break  # We've processed all tokens
+                break  # All tokens processed
         
         return chunks
     
@@ -662,8 +660,8 @@ class RagService:
             logger.debug(f"Qwen3 reranked {len(matches)} results")
             return matches
             
-        except Exception as e:
-            logger.exception(f"Qwen3 reranking failed: {e}")
+        except Exception:
+            logger.exception("Qwen3 reranking failed")
             # Fallback to custom algorithm if available
             if settings.reranker_fallback_to_custom:
                 logger.info("Falling back to custom reranking algorithm")

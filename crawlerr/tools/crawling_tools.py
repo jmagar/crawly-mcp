@@ -194,11 +194,12 @@ def register_crawling_tools(mcp: FastMCP):
             raise ToolError("max_depth cannot exceed 5")
         
         # Create progress tracker
-        progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(url)}")
+        # progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(url)}")
         
         try:
             # Initialize crawler service
             crawler_service = CrawlerService()
+            await ctx.info("CrawlerService initialized successfully")
             
             # Try sitemap first if requested
             urls_to_crawl = [url]
@@ -234,12 +235,16 @@ def register_crawling_tools(mcp: FastMCP):
             await ctx.report_progress(progress=2, total=10)
             crawl_result = await crawler_service.crawl_website(request, crawler_progress)
             
-            if crawl_result.status.value != "completed":
+            # Debug logging
+            await ctx.info(f"Crawl result status: {crawl_result.status} (type: {type(crawl_result.status)})")
+            await ctx.info(f"Pages found: {len(crawl_result.pages)}")
+            
+            if crawl_result.status != "completed":
                 raise ToolError(f"Crawl failed: {', '.join(crawl_result.errors)}")
             
             # Prepare response with advanced features information
             result = {
-                "status": crawl_result.status.value,
+                "status": crawl_result.status,
                 "pages_crawled": len(crawl_result.pages),
                 "pages_requested": crawl_result.statistics.total_pages_requested,
                 "success_rate": crawl_result.success_rate,
@@ -311,10 +316,14 @@ def register_crawling_tools(mcp: FastMCP):
         except Exception as e:
             error_msg = f"Crawl failed: {str(e)}"
             await ctx.info(error_msg)
+            # Add more detailed error logging
+            import traceback
+            await ctx.info(f"Full traceback: {traceback.format_exc()}")
             raise ToolError(error_msg)
         
         finally:
-            progress_middleware.remove_tracker(progress_tracker.operation_id)
+            pass
+            # progress_middleware.remove_tracker(progress_tracker.operation_id)
     
     @mcp.tool
     async def crawl_repo(

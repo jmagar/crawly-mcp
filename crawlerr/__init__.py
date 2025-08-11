@@ -9,7 +9,12 @@ A production-ready MCP server that combines:
 - Real-time progress reporting
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
 
 __version__ = "0.1.0"
 __author__ = "Crawlerr Team"
@@ -18,13 +23,15 @@ __description__ = "RAG-enabled web crawling MCP server"
 # Main exports - use lazy imports to avoid module conflicts
 from .config import settings
 
-__all__ = ["settings", "get_mcp", "get_main"]
+__all__ = ["get_main", "get_mcp", "settings"]
 
 # Lazy imports to prevent conflicts when running server module directly
-def get_mcp() -> Any:
+def get_mcp() -> "FastMCP":
+    """Get the FastMCP server instance."""
     from .server import mcp
     return mcp
 
-def get_main() -> Any:
+def get_main() -> "Callable[[], None]":
+    """Get the main CLI entry point function."""
     from .server import main  
     return main

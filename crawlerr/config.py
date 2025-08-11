@@ -1,7 +1,7 @@
 """
 Configuration management for Crawlerr using Pydantic Settings.
 """
-from typing import Optional, List
+from typing import List
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator, ConfigDict
 import os
@@ -22,12 +22,12 @@ class CrawlerrSettings(BaseSettings):
     # Logging Configuration
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_format: str = Field(default="console", alias="LOG_FORMAT")
-    log_file: Optional[str] = Field(default=None, alias="LOG_FILE")
+    log_file: str | None = Field(default=None, alias="LOG_FILE")
     log_to_file: bool = Field(default=False, alias="LOG_TO_FILE")
     
     # Qdrant Vector Database
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
-    qdrant_api_key: Optional[str] = Field(default=None, alias="QDRANT_API_KEY")
+    qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
     qdrant_collection: str = Field(default="crawlerr_documents", alias="QDRANT_COLLECTION")
     qdrant_vector_size: int = Field(default=1024, alias="QDRANT_VECTOR_SIZE")
     qdrant_distance: str = Field(default="cosine", alias="QDRANT_DISTANCE")
@@ -51,9 +51,16 @@ class CrawlerrSettings(BaseSettings):
     # Reranker Configuration
     reranker_model: str = Field(default="tomaarsen/Qwen3-Reranker-0.6B-seq-cls", alias="RERANKER_MODEL")
     reranker_enabled: bool = Field(default=True, alias="RERANKER_ENABLED")
-    reranker_top_k: int = Field(default=10, alias="RERANKER_TOP_K")
-    reranker_max_length: int = Field(default=512, alias="RERANKER_MAX_LENGTH")
+    reranker_top_k: int = Field(default=10, alias="RERANKER_TOP_K", gt=0, le=100)
+    reranker_max_length: int = Field(default=512, alias="RERANKER_MAX_LENGTH", gt=0, le=4096)
     reranker_fallback_to_custom: bool = Field(default=True, alias="RERANKER_FALLBACK_TO_CUSTOM")
+    
+    @field_validator("reranker_model", mode="before")
+    @classmethod
+    def _validate_reranker_model(cls, v: str) -> str:
+        if not v or not str(v).strip():
+            raise ValueError("RERANKER_MODEL must be a non-empty string")
+        return v
     
     # Crawling Configuration
     crawl_headless: bool = Field(default=True, alias="CRAWL_HEADLESS")
@@ -97,9 +104,9 @@ class CrawlerrSettings(BaseSettings):
     
     @field_validator("log_file", mode="before")
     @classmethod
-    def create_log_directory(cls, v):
+    def create_log_directory(cls, v: str | None) -> str | None:
         if v:
-            log_path = Path(v)
+            log_path = Path(str(v)).expanduser()
             log_path.parent.mkdir(parents=True, exist_ok=True)
         return v
     

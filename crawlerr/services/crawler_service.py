@@ -19,6 +19,8 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from crawl4ai.extraction_strategy import LLMExtractionStrategy, CosineStrategy, JsonCssExtractionStrategy
 from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher
 from crawl4ai import VirtualScrollConfig
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy, DFSDeepCrawlStrategy
+from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter, DomainFilter, ContentTypeFilter
 from ..config import settings
 from ..models.crawl_models import (
     CrawlRequest, CrawlResult, CrawlStatus, PageContent, CrawlStatistics
@@ -250,92 +252,36 @@ class CrawlerService:
                     
                     logger.info(f"Discovered {len(discovered_urls)} URLs from sitemap")
                 else:
-                    logger.info("No sitemap found, using single URL")
+                    logger.info("No sitemap found, falling back to recursive crawling")
+                    discovered_urls.add(start_url)
             except Exception as e:
-                logger.warning(f"Sitemap discovery failed: {e}, using single URL")
-            
-            # Limit URLs to max_pages
-            urls_to_crawl = list(discovered_urls)[:request.max_pages]
+                logger.warning(f"Sitemap discovery failed: {e}, falling back to recursive crawling")
+                discovered_urls.add(start_url)
             
             if progress_callback:
                 await progress_callback(2, 4)
             
-            # Phase 2: Configure crawler and dispatcher
-            run_config = CrawlerRunConfig(
-                page_timeout=int(settings.crawler_timeout * 1000),
-                delay_before_return_html=0.5,
-                remove_overlay_elements=settings.crawl_remove_overlays,
-                word_count_threshold=settings.crawl_min_words,
-                stream=False  # Use batch mode
-            )
-            
-            # Use MemoryAdaptiveDispatcher for multiple URLs
-            dispatcher = MemoryAdaptiveDispatcher(
-                memory_threshold_percent=settings.crawl_memory_threshold,
-                max_session_permit=min(settings.max_concurrent_crawls, len(urls_to_crawl))
-            )
-            
-            # Phase 3: Crawl all URLs using arun_many
-            async with AsyncWebCrawler(config=self.browser_config) as crawler:
-                logger.info(f"Starting crawl of {len(urls_to_crawl)} URLs")
-                
-                crawl_results = await crawler.arun_many(
-                    urls=urls_to_crawl,
-                    config=run_config,
-                    dispatcher=dispatcher
+            # Phase 2: Implement recursive crawling if sitemap not found
+            if len(discovered_urls) == 1 and start_url in discovered_urls:
+                # Use Crawl4AI's native deep crawling strategy
+                pages = await self._native_deep_crawl(
+                    start_url=start_url,
+                    max_pages=request.max_pages,
+                    max_depth=request.max_depth,
+                    include_patterns=request.include_patterns,
+                    exclude_patterns=request.exclude_patterns,
+                    stats=stats,
+                    progress_callback=progress_callback
                 )
-                
-                # Process results
-                pages = []
-                for crawl_result in crawl_results:
-                    if crawl_result.success:
-                        # Extract links
-                        links = []
-                        if hasattr(crawl_result, 'links') and crawl_result.links:
-                            for link in crawl_result.links:
-                                if isinstance(link, dict):
-                                    href = link.get('href', '')
-                                else:
-                                    href = str(link)
-                                
-                                if href:
-                                    absolute_url = urljoin(crawl_result.url, href)
-                                    links.append(absolute_url)
-                        
-                        # Extract images  
-                        images = []
-                        if hasattr(crawl_result, 'media') and crawl_result.media:
-                            for media in crawl_result.media:
-                                if isinstance(media, dict):
-                                    src = media.get('src', '')
-                                    if media.get('type') == 'image' and src:
-                                        absolute_url = urljoin(crawl_result.url, src)
-                                        images.append(absolute_url)
-                        
-                        page_content = PageContent(
-                            url=crawl_result.url,
-                            title=crawl_result.metadata.get('title', '') if crawl_result.metadata else '',
-                            content=crawl_result.cleaned_html if hasattr(crawl_result, 'cleaned_html') else crawl_result.markdown,
-                            markdown=crawl_result.markdown if hasattr(crawl_result, 'markdown') else '',
-                            html=crawl_result.html if request.include_raw_html else None,
-                            links=links,
-                            images=images,
-                            metadata={
-                                'http_status': crawl_result.status_code if hasattr(crawl_result, 'status_code') else None,
-                                'content_length': len(crawl_result.html) if crawl_result.html else 0,
-                                'extraction_method': 'multi_url_batch',
-                                **(crawl_result.metadata or {})
-                            }
-                        )
-                        pages.append(page_content)
-                    else:
-                        result.errors.append(f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}")
-                        
-                result.pages = pages
-                stats.total_pages_crawled = len(pages)
-                stats.total_pages_failed = len([r for r in crawl_results if not r.success])
-                
-                logger.info(f"Crawled {len(pages)} pages successfully, {stats.total_pages_failed} failed")
+            else:
+                # Use sitemap URLs - batch crawl approach
+                urls_to_crawl = list(discovered_urls)[:request.max_pages]
+                pages = await self._batch_crawl(urls_to_crawl, stats)
+            
+            # Set result pages and update statistics  
+            result.pages = pages
+            stats.total_pages_crawled = len(pages)
+            logger.info(f"Crawled {len(pages)} pages successfully, {stats.total_pages_failed} failed")
             
             if progress_callback:
                 await progress_callback(3, 4)
@@ -446,6 +392,413 @@ class CrawlerService:
             logger.error(f"Error extracting sitemap URLs: {e}")
         
         return list(urls)
+    
+    async def _recursive_crawl(
+        self,
+        start_url: str,
+        max_pages: int,
+        max_depth: int,
+        include_patterns: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        stats: CrawlStatistics = None,
+        progress_callback: Optional[callable] = None
+    ) -> List[PageContent]:
+        """
+        Implement breadth-first recursive crawling to discover linked pages.
+        """
+        pages = []
+        visited_urls = set()
+        url_queue = [(start_url, 0)]  # (url, depth)
+        domain = urlparse(start_url).netloc
+        
+        run_config = CrawlerRunConfig(
+            page_timeout=int(settings.crawler_timeout * 1000),
+            delay_before_return_html=0.5,
+            remove_overlay_elements=settings.crawl_remove_overlays,
+            word_count_threshold=settings.crawl_min_words,
+            stream=False
+        )
+        
+        async with AsyncWebCrawler(config=self.browser_config) as crawler:
+            while url_queue and len(pages) < max_pages:
+                current_url, depth = url_queue.pop(0)
+                
+                if current_url in visited_urls or depth > max_depth:
+                    continue
+                    
+                # Apply include/exclude patterns
+                if exclude_patterns and any(pattern in current_url for pattern in exclude_patterns):
+                    continue
+                if include_patterns and not any(pattern in current_url for pattern in include_patterns):
+                    continue
+                
+                visited_urls.add(current_url)
+                logger.info(f"Crawling [{depth}/{max_depth}]: {current_url}")
+                
+                try:
+                    result = await crawler.arun(url=current_url, config=run_config)
+                    
+                    if result.success:
+                        page_content = self._process_crawl_result(result, extract_raw_html=False)
+                        pages.append(page_content)
+                        stats.total_pages_crawled += 1
+                        
+                        # Extract and queue new links if we haven't reached max depth
+                        if depth < max_depth and len(pages) < max_pages:
+                            new_links = self._extract_links_from_result(result, domain)
+                            for link in new_links:
+                                if link not in visited_urls and (link, depth + 1) not in url_queue:
+                                    url_queue.append((link, depth + 1))
+                                    
+                        if progress_callback:
+                            progress = min(len(pages) / max_pages, 1.0)
+                            await progress_callback(2 + int(progress), 4)
+                            
+                    else:
+                        stats.total_pages_failed += 1
+                        logger.warning(f"Failed to crawl {current_url}: {result.error_message}")
+                        
+                except Exception as e:
+                    stats.total_pages_failed += 1
+                    logger.error(f"Error crawling {current_url}: {e}")
+                    
+        logger.info(f"Recursive crawl discovered {len(pages)} pages across {max_depth} depth levels")
+        return pages
+    
+    async def _batch_crawl(self, urls: List[str], stats: CrawlStatistics) -> List[PageContent]:
+        """
+        Crawl a batch of URLs concurrently using arun_many.
+        """
+        run_config = CrawlerRunConfig(
+            page_timeout=int(settings.crawler_timeout * 1000),
+            delay_before_return_html=0.5,
+            remove_overlay_elements=settings.crawl_remove_overlays,
+            word_count_threshold=settings.crawl_min_words,
+            stream=False
+        )
+        
+        dispatcher = MemoryAdaptiveDispatcher(
+            memory_threshold_percent=settings.crawl_memory_threshold,
+            max_session_permit=min(settings.max_concurrent_crawls, len(urls))
+        )
+        
+        pages = []
+        async with AsyncWebCrawler(config=self.browser_config) as crawler:
+            logger.info(f"Starting batch crawl of {len(urls)} URLs")
+            
+            crawl_results = await crawler.arun_many(
+                urls=urls,
+                config=run_config,
+                dispatcher=dispatcher
+            )
+            
+            for crawl_result in crawl_results:
+                if crawl_result.success:
+                    page_content = self._process_crawl_result(crawl_result, extract_raw_html=False)
+                    pages.append(page_content)
+                    stats.total_pages_crawled += 1
+                else:
+                    stats.total_pages_failed += 1
+                    logger.warning(f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}")
+                    
+        return pages
+    
+    def _process_crawl_result(self, crawl_result, extract_raw_html: bool = False) -> PageContent:
+        """
+        Process a single crawl result into PageContent.
+        """
+        # Extract links
+        links = []
+        if hasattr(crawl_result, 'links') and crawl_result.links:
+            for link in crawl_result.links:
+                if isinstance(link, dict):
+                    href = link.get('href', '')
+                else:
+                    href = str(link)
+                
+                if href:
+                    absolute_url = urljoin(crawl_result.url, href)
+                    links.append(absolute_url)
+        
+        # Extract images
+        images = []
+        if hasattr(crawl_result, 'media') and crawl_result.media:
+            for media in crawl_result.media:
+                if isinstance(media, dict):
+                    src = media.get('src', '')
+                    if media.get('type') == 'image' and src:
+                        absolute_url = urljoin(crawl_result.url, src)
+                        images.append(absolute_url)
+        
+        return PageContent(
+            url=crawl_result.url,
+            title=crawl_result.metadata.get('title', '') if crawl_result.metadata else '',
+            content=crawl_result.cleaned_html if hasattr(crawl_result, 'cleaned_html') else crawl_result.markdown,
+            markdown=crawl_result.markdown if hasattr(crawl_result, 'markdown') else '',
+            html=crawl_result.html if extract_raw_html else None,
+            links=links,
+            images=images,
+            metadata={
+                'http_status': crawl_result.status_code if hasattr(crawl_result, 'status_code') else None,
+                'content_length': len(crawl_result.html) if crawl_result.html else 0,
+                'extraction_method': 'recursive_crawl',
+                **(crawl_result.metadata or {})
+            }
+        )
+    
+    def _extract_links_from_result(self, crawl_result, domain: str) -> List[str]:
+        """
+        Extract same-domain links from a crawl result.
+        """
+        links = []
+        if hasattr(crawl_result, 'links') and crawl_result.links:
+            for link in crawl_result.links:
+                if isinstance(link, dict):
+                    href = link.get('href', '')
+                else:
+                    href = str(link)
+                
+                if href:
+                    absolute_url = urljoin(crawl_result.url, href)
+                    # Only add same-domain links
+                    if urlparse(absolute_url).netloc == domain:
+                        links.append(absolute_url)
+                        
+        return links
+    
+    async def _native_deep_crawl(
+        self,
+        start_url: str,
+        max_pages: int,
+        max_depth: int,
+        include_patterns: Optional[List[str]] = None,
+        exclude_patterns: Optional[List[str]] = None,
+        stats: CrawlStatistics = None,
+        progress_callback: Optional[callable] = None
+    ) -> List[PageContent]:
+        """
+        Use Crawl4AI's native deep crawling capabilities with proper URL filtering.
+        
+        This replaces our custom implementation with Crawl4AI's native strategies
+        to avoid crawling invalid URLs like /internal and /external.
+        """
+        domain = urlparse(start_url).netloc
+        
+        # Create comprehensive filter chain to avoid invalid URLs
+        filter_chain = FilterChain([
+            # Domain filter to stay within same domain
+            DomainFilter(
+                allowed_domains=[domain],
+                blocked_domains=[]
+            ),
+            
+            # Content type filter for HTML pages only
+            ContentTypeFilter(
+                allowed_types=["text/html"],
+                check_extension=True
+            ),
+            
+            # URL pattern filter to exclude invalid patterns
+            URLPatternFilter(
+                patterns=[
+                    # Exclude navigation placeholders and invalid endpoints
+                    "*/internal*",
+                    "*/external*", 
+                    "*/api/*",
+                    "*/admin/*",
+                    "*/login*",
+                    "*/logout*",
+                    "*/register*",
+                    "*/auth/*",
+                    "*/private/*",
+                    "*/secure/*",
+                    
+                    # Exclude assets and media
+                    "*.css",
+                    "*.js",
+                    "*.jpg",
+                    "*.jpeg",
+                    "*.png",
+                    "*.gif",
+                    "*.svg",
+                    "*.ico",
+                    "*.pdf",
+                    "*.zip",
+                    "*.xml",
+                    "*.json",
+                    
+                    # Exclude common non-content pages
+                    "*/search*",
+                    "*/contact*",
+                    "*/privacy*",
+                    "*/terms*",
+                    "*/cookie*",
+                    "*/rss*",
+                    "*/feed*",
+                    
+                    # Exclude fragment-only or query-only URLs
+                    "*#*",
+                    "*?only*"
+                ],
+                reverse=True,  # Exclude matching patterns
+                use_glob=True
+            )
+        ])
+        
+        # Apply user-defined include/exclude patterns if provided
+        if include_patterns:
+            user_include_filter = URLPatternFilter(
+                patterns=include_patterns,
+                reverse=False,
+                use_glob=True
+            )
+            filter_chain.filters.append(user_include_filter)
+            
+        if exclude_patterns:
+            user_exclude_filter = URLPatternFilter(
+                patterns=exclude_patterns,
+                reverse=True,
+                use_glob=True
+            )
+            filter_chain.filters.append(user_exclude_filter)
+        
+        # Use BFS strategy with comprehensive filtering
+        deep_crawl_strategy = BFSDeepCrawlStrategy(
+            max_depth=max_depth,
+            include_external=False,  # Stay within same domain
+            max_pages=max_pages,
+            filter_chain=filter_chain
+        )
+        
+        # Configure crawler with deep crawl strategy
+        crawl_config = CrawlerRunConfig(
+            page_timeout=int(settings.crawler_timeout * 1000),
+            delay_before_return_html=0.5,
+            remove_overlay_elements=settings.crawl_remove_overlays,
+            word_count_threshold=settings.crawl_min_words,
+            deep_crawl_strategy=deep_crawl_strategy,
+            verbose=True
+        )
+        
+        pages = []
+        async with AsyncWebCrawler(config=self.browser_config) as crawler:
+            logger.info(f"Starting native Crawl4AI deep crawl from {start_url} (max_pages: {max_pages}, max_depth: {max_depth})")
+            
+            try:
+                # Use Crawl4AI's native deep crawling
+                result = await crawler.arun(url=start_url, config=crawl_config)
+                
+                if result.success:
+                    # Process main page
+                    page_content = self._process_crawl_result(result, extract_raw_html=False)
+                    pages.append(page_content)
+                    stats.total_pages_crawled += 1
+                    
+                    # Check if deep crawl results are available
+                    if hasattr(result, 'deep_crawl_results') and result.deep_crawl_results:
+                        for crawl_result in result.deep_crawl_results:
+                            if crawl_result.success:
+                                page_content = self._process_crawl_result(crawl_result, extract_raw_html=False)
+                                pages.append(page_content)
+                                stats.total_pages_crawled += 1
+                                
+                                if progress_callback:
+                                    progress = min(len(pages) / max_pages, 1.0)
+                                    await progress_callback(2 + int(progress * 0.6), 4)
+                            else:
+                                stats.total_pages_failed += 1
+                                logger.warning(f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}")
+                    else:
+                        # Fallback to manual BFS if deep_crawl_results not available
+                        logger.info("Deep crawl results not available, using manual BFS approach with filtering")
+                        additional_pages = await self._manual_bfs_with_filtering(
+                            crawler, start_url, max_pages - 1, max_depth, filter_chain, stats
+                        )
+                        pages.extend(additional_pages)
+                        
+                else:
+                    stats.total_pages_failed += 1
+                    logger.error(f"Failed to start deep crawl from {start_url}: {result.error_message}")
+                    
+            except Exception as e:
+                stats.total_pages_failed += 1
+                logger.error(f"Error during native deep crawl: {e}")
+                
+        logger.info(f"Native deep crawl completed: {len(pages)} pages discovered with proper URL filtering")
+        return pages
+    
+    async def _manual_bfs_with_filtering(
+        self,
+        crawler: AsyncWebCrawler,
+        start_url: str,
+        max_pages: int,
+        max_depth: int,
+        filter_chain: FilterChain,
+        stats: CrawlStatistics
+    ) -> List[PageContent]:
+        """
+        Manual BFS crawling with proper URL filtering as fallback.
+        
+        This is used when Crawl4AI's native deep crawl doesn't return deep_crawl_results.
+        """
+        pages = []
+        visited_urls = {start_url}
+        url_queue = [(start_url, 0)]
+        domain = urlparse(start_url).netloc
+        
+        run_config = CrawlerRunConfig(
+            page_timeout=int(settings.crawler_timeout * 1000),
+            delay_before_return_html=0.5,
+            remove_overlay_elements=settings.crawl_remove_overlays,
+            word_count_threshold=settings.crawl_min_words
+        )
+        
+        while url_queue and len(pages) < max_pages:
+            current_url, depth = url_queue.pop(0)
+            
+            if depth >= max_depth:
+                continue
+                
+            logger.info(f"Manual BFS crawl [{depth}/{max_depth}] ({len(pages)+1}/{max_pages}): {current_url}")
+            
+            try:
+                result = await crawler.arun(url=current_url, config=run_config)
+                
+                if result.success:
+                    page_content = self._process_crawl_result(result, extract_raw_html=False)
+                    pages.append(page_content)
+                    stats.total_pages_crawled += 1
+                    
+                    # Extract links using crawl4ai's built-in link extraction
+                    if hasattr(result, 'links') and result.links and depth < max_depth:
+                        for link in result.links:
+                            href = self._extract_href(link)
+                            if href:
+                                absolute_url = urljoin(current_url, href)
+                                
+                                # Apply filter chain to validate URL
+                                if absolute_url not in visited_urls and await filter_chain.apply(absolute_url):
+                                    visited_urls.add(absolute_url)
+                                    url_queue.append((absolute_url, depth + 1))
+                                    
+                else:
+                    stats.total_pages_failed += 1
+                    logger.warning(f"Failed to crawl {current_url}: {result.error_message}")
+                    
+            except Exception as e:
+                stats.total_pages_failed += 1
+                logger.error(f"Error crawling {current_url}: {e}")
+                
+        return pages
+    
+    def _extract_href(self, link) -> str:
+        """Extract href from link object."""
+        if isinstance(link, dict):
+            return link.get('href', '')
+        elif isinstance(link, str):
+            return link
+        else:
+            return str(link) if link else ''
     
     async def crawl_repository(
         self,

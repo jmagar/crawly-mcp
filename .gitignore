@@ -83,7 +83,14 @@ vector_storage/
 
 # HF TEI cache
 tei_data/
-models/
+# ML model files (but not our code models directory)
+*.model
+*.pt
+*.pth
+*.onnx
+*.safetensors
+model_files/
+pretrained_models/
 .cache/
 
 # Environment files

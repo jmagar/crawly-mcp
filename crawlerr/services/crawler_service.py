@@ -164,6 +164,48 @@ class CrawlerService:
             logger.debug("GPU utilization check failed: %s", e)
         
         return {'available': False}
+    
+    async def _monitor_gpu_during_crawl(self) -> None:
+        """
+        Monitor GPU utilization continuously during crawl operations.
+        Logs real-time GPU usage to show actual hardware acceleration activity.
+        """
+        try:
+            peak_utilization = 0
+            peak_memory_usage = 0
+            sample_count = 0
+            
+            while True:
+                await asyncio.sleep(2)  # Sample every 2 seconds
+                
+                gpu_metrics = self._get_gpu_utilization()
+                if gpu_metrics.get('available'):
+                    util = gpu_metrics['gpu_utilization_percent']
+                    memory_used = gpu_metrics['memory_used_mb']
+                    temp = gpu_metrics['temperature_c']
+                    
+                    # Track peaks
+                    if util > peak_utilization:
+                        peak_utilization = util
+                    if memory_used > peak_memory_usage:
+                        peak_memory_usage = memory_used
+                    
+                    sample_count += 1
+                    
+                    # Log significant GPU activity during crawl
+                    if util > 10:  # Significant GPU usage
+                        logger.info("🔥 RTX 4070 GPU ACTIVE: %d%% util, %dMB used, %d°C (during crawl)", util, memory_used, temp)
+                    elif util > 5:  # Moderate GPU usage
+                        logger.info("⚡ RTX 4070 GPU working: %d%% util, %dMB used, %d°C", util, memory_used, temp)
+                    elif sample_count % 5 == 0:  # Periodic low-usage updates
+                        logger.info("🎮 RTX 4070 GPU monitor: %d%% util, %dMB used, %d°C", util, memory_used, temp)
+                        
+        except asyncio.CancelledError:
+            # Log final peak statistics when monitoring ends
+            if peak_utilization > 0:
+                logger.info("🏁 RTX 4070 GPU crawl complete - Peak utilization: %d%%, Peak memory: %dMB", 
+                           peak_utilization, peak_memory_usage)
+            raise
 
     def _is_gpu_available(self) -> bool:
         """
@@ -698,6 +740,11 @@ class CrawlerService:
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
             logger.info("Starting GPU-accelerated batch crawl of %d URLs with %d concurrent sessions", len(urls), max_sessions)
             
+            # Start continuous GPU monitoring during crawl if enabled
+            gpu_monitor_task = None
+            if settings.crawl_gpu_enabled and settings.gpu_acceleration and gpu_metrics_before:
+                gpu_monitor_task = asyncio.create_task(self._monitor_gpu_during_crawl())
+            
             try:
                 crawl_results = await crawler.arun_many(
                     urls=urls,
@@ -718,10 +765,19 @@ class CrawlerService:
                     else:
                         stats.total_pages_failed += 1
                         logger.warning("Failed to crawl %s: %s", crawl_url, crawl_result.error_message)
+                        
             except Exception as e:
                 logger.exception("Error during batch crawl")
                 # Mark all URLs as failed
                 stats.total_pages_failed += len(urls)
+            finally:
+                # Stop GPU monitoring
+                if gpu_monitor_task:
+                    gpu_monitor_task.cancel()
+                    try:
+                        await gpu_monitor_task
+                    except asyncio.CancelledError:
+                        pass
         
         # Monitor GPU utilization after crawl to show actual usage
         if settings.crawl_gpu_enabled and settings.gpu_acceleration and gpu_metrics_before:

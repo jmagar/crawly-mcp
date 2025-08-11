@@ -270,6 +270,8 @@ class RagService:
                     chunk = {
                         'text': chunk_text,
                         'chunk_index': chunk_index,
+                        'start_pos': start_token,  # Use start_pos for consistency with character-based chunking
+                        'end_pos': end_token,      # Use end_pos for consistency with character-based chunking
                         'start_token': start_token,
                         'end_token': end_token,
                         'token_count': len(chunk_tokens),
@@ -305,9 +307,15 @@ class RagService:
                 
                 if chunk_text.strip():
                     estimated_tokens = int(len(chunk_words) * approx_tokens_per_word)
+                    # Calculate character positions for consistency
+                    text_start_pos = len(' '.join(words[:start_word])) + (1 if start_word > 0 else 0)
+                    text_end_pos = text_start_pos + len(chunk_text)
+                    
                     chunk = {
                         'text': chunk_text,
                         'chunk_index': chunk_index,
+                        'start_pos': text_start_pos,  # Character position for consistency
+                        'end_pos': text_end_pos,      # Character position for consistency
                         'start_word': start_word,
                         'end_word': end_word,
                         'token_count_estimate': estimated_tokens,

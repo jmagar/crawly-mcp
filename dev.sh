@@ -189,8 +189,21 @@ start_mcp_server() {
     # Save PID to file
     echo "$server_pid" > "$PIDFILE"
     
-    # Wait a moment to check if server started successfully
-    sleep 3
+    # Wait for port to be available
+    log_info "Waiting for port 8010 to be available..."
+    local port_attempts=0
+    while lsof -Pi :8010 -sTCP:LISTEN -t >/dev/null 2>&1 && [ $port_attempts -lt 20 ]; do
+        sleep 0.5
+        port_attempts=$((port_attempts + 1))
+    done
+    
+    if [ $port_attempts -eq 20 ]; then
+        log_error "Port 8010 is still in use after 10 seconds"
+        exit 1
+    fi
+    
+    # Wait a moment to check if server started successfully  
+    sleep 2
     
     if ps -p "$server_pid" > /dev/null 2>&1; then
         log_success "MCP server started successfully (PID: $server_pid)"

@@ -709,7 +709,6 @@ class CrawlerService:
         pages = []
         visited_urls = {start_url}
         url_queue = [(start_url, 0)]
-        domain = urlparse(start_url).netloc
         
         run_config = CrawlerRunConfig(
             page_timeout=int(settings.crawler_timeout * 1000),

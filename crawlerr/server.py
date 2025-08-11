@@ -14,7 +14,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
@@ -46,7 +46,7 @@ def setup_logging() -> None:
         rich_tracebacks=True,
         tracebacks_show_locals=settings.debug,
         markup=True,
-        log_time_format="[%H:%M:%S]"
+        log_time_format="[%H:%M:%S]",
     )
     
     # Configure root logger
@@ -54,7 +54,7 @@ def setup_logging() -> None:
         level=getattr(logging, settings.log_level.upper()),
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[rich_handler]
+        handlers=[rich_handler],
     )
     
     # Create file handler if specified
@@ -66,7 +66,7 @@ def setup_logging() -> None:
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            datefmt="%Y-%m-%d %H:%M:%S",
         ))
         logging.getLogger().addHandler(file_handler)
     
@@ -115,7 +115,7 @@ logger.info("Registered all FastMCP tools")
 
 
 @mcp.tool
-async def health_check(ctx: Context) -> Dict[str, Any]:
+async def health_check(ctx: Context) -> dict[str, Any]:
     """
     Perform a comprehensive health check of all services.
     
@@ -204,18 +204,18 @@ async def health_check(ctx: Context) -> Dict[str, Any]:
         all_healthy = all(service_statuses)
         health_results["overall_status"] = "healthy" if all_healthy else "degraded"
         
-        await ctx.info(f"Health check completed - Overall status: {health_results['overall_status']}")
+        await ctx.info("Health check completed - Overall status: %s", health_results['overall_status'])
         
         return health_results
         
     except Exception as e:
-        error_msg = f"Health check failed: {str(e)}"
+        error_msg = "Health check failed: %s" % str(e)
         await ctx.info(error_msg)
         raise ToolError(error_msg)
 
 
 @mcp.tool
-async def get_server_info(ctx: Context) -> Dict[str, Any]:
+async def get_server_info(ctx: Context) -> dict[str, Any]:
     """
     Get detailed information about the server configuration and capabilities.
     
@@ -310,14 +310,14 @@ async def get_server_info(ctx: Context) -> Dict[str, Any]:
 async def startup_checks():
     """Initialize services and perform startup checks."""
     logger.info("[bold]📋 Starting Crawlerr server v0.1.0[/bold]")
-    logger.info(f"[dim]🐛 Debug mode: {settings.debug} | 🏭 Production: {settings.production}[/dim]")
+    logger.info("[dim]🐛 Debug mode: %s | 🏭 Production: %s[/dim]", settings.debug, settings.production)
     
     # Log service endpoints with emojis
-    logger.info(f"[blue]🗂️  Qdrant endpoint: {settings.qdrant_url}[/blue]")
-    logger.info(f"[purple]🤖 TEI endpoint: {settings.tei_url}[/purple]")
-    logger.info(f"[magenta]🧠 TEI model: {settings.tei_model}[/magenta]")
-    logger.info(f"[yellow]🔄 Reranker model: {settings.reranker_model}[/yellow]")
-    logger.info(f"[red]⏱️  Crawl timeout: {settings.crawler_timeout}s[/red]")
+    logger.info("[blue]🗂️  Qdrant endpoint: %s[/blue]", settings.qdrant_url)
+    logger.info("[purple]🤖 TEI endpoint: %s[/purple]", settings.tei_url)
+    logger.info("[magenta]🧠 TEI model: %s[/magenta]", settings.tei_model)
+    logger.info("[yellow]🔄 Reranker model: %s[/yellow]", settings.reranker_model)
+    logger.info("[red]⏱️  Crawl timeout: %ss[/red]", settings.crawler_timeout)
     
     # Perform basic health check
     try:
@@ -325,7 +325,7 @@ async def startup_checks():
         async with EmbeddingService() as embedding_service:
             embedding_healthy = await embedding_service.health_check()
             status = "[green]✅[/green]" if embedding_healthy else "[red]❌[/red]"
-            logger.info(f"🚀 Embedding service health: {status}")
+            logger.info("🚀 Embedding service health: %s", status)
         
         async with VectorService() as vector_service:
             vector_healthy = await vector_service.health_check()
@@ -333,19 +333,19 @@ async def startup_checks():
             collection_created = await vector_service.ensure_collection()
             v_status = "[green]✅[/green]" if vector_healthy else "[red]❌[/red]"
             c_status = "[green]✅[/green]" if collection_created else "[red]❌[/red]"
-            logger.info(f"🗄️  Vector service health: {v_status}")
-            logger.info(f"📚 Vector collection ready: {c_status}")
+            logger.info("🗄️  Vector service health: %s", v_status)
+            logger.info("📚 Vector collection ready: %s", c_status)
         
         logger.info("[bold green]🎉 Crawlerr server started successfully![/bold green]")
         
     except ToolError as e:
-        logger.error(f"[red]❌ Critical startup error: {e}[/red]")
+        logger.exception("[red]❌ Critical startup error: %s[/red]", e)
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
     except (ConnectionError, TimeoutError) as e:
-        logger.warning(f"[yellow]⚠️  Service connection failed: {e}[/yellow]")
+        logger.warning("[yellow]⚠️  Service connection failed: %s[/yellow]", e)
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
     except Exception as e:
-        logger.exception(f"[red]💥 Unexpected startup error: {e}[/red]")
+        logger.exception("[red]💥 Unexpected startup error[/red]")
         logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
 
 
@@ -363,7 +363,7 @@ def main() -> None:
         asyncio.run(startup_checks())
         
         # Start the FastMCP server with HTTP transport
-        logger.info(f"[cyan]🌐 Starting FastMCP server on {settings.server_host}:{settings.server_port}[/cyan]")
+        logger.info("[cyan]🌐 Starting FastMCP server on %s:%s[/cyan]", settings.server_host, settings.server_port)
         
         # Import uvicorn for server
         import uvicorn
@@ -380,7 +380,7 @@ def main() -> None:
         logger.info("Server stopped by user")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Server failed to start: {e}")
+        logger.error("Server failed to start: %s", e)
         sys.exit(1)
 
 

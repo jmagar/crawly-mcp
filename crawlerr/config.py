@@ -6,6 +6,9 @@ from pydantic import Field, field_validator, ConfigDict
 import os
 from pathlib import Path
 
+# Constants for error messages
+RERANKER_MODEL_ERROR = "RERANKER_MODEL must be a non-empty string"
+
 
 class CrawlerrSettings(BaseSettings):
     """
@@ -58,7 +61,7 @@ class CrawlerrSettings(BaseSettings):
     @classmethod
     def _validate_reranker_model(cls, v: str) -> str:
         if not v or not str(v).strip():
-            raise ValueError("RERANKER_MODEL must be a non-empty string")
+            raise ValueError(RERANKER_MODEL_ERROR)
         return v
     
     # Crawling Configuration
@@ -75,7 +78,7 @@ class CrawlerrSettings(BaseSettings):
     crawl_knowledge_graph: bool = Field(default=False, alias="CRAWL_KNOWLEDGE_GRAPH")
     crawl_user_agent: str = Field(
         default="Crawlerr/0.1.0 (+https://github.com/user/crawlerr)",
-        alias="CRAWL_USER_AGENT"
+        alias="CRAWL_USER_AGENT",
     )
     
     # Crawl4AI 0.7.0 Advanced Features

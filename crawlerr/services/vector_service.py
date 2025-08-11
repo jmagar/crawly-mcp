@@ -255,11 +255,16 @@ class VectorService:
                 score_threshold=score_threshold,
                 query_filter=search_filter,
                 with_payload=True,
-                with_vectors=False  # Don't return vectors to save bandwidth
+                with_vectors=False,  # Don't return vectors to save bandwidth
             )
             
             # Extract results from tuple (results, next_offset)
-            results = query_response.points if hasattr(query_response, 'points') else query_response[0] if isinstance(query_response, (tuple, list)) else query_response
+            results = getattr(query_response, "points", None)
+            if results is None:
+                if isinstance(query_response, tuple | list):
+                    results = query_response[0]
+                else:
+                    results = query_response
             
             # Convert results to SearchMatch objects
             matches = []

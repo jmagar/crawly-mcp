@@ -23,6 +23,40 @@ logger = logging.getLogger(__name__)
 WORD_TO_TOKEN_RATIO = 1.3
 
 
+def find_paragraph_boundary(search_text: str, ideal_end: int) -> Optional[int]:
+    """Find paragraph break boundary."""
+    paragraph_breaks = [i for i, char in enumerate(search_text) if search_text[i:i+2] == '\n\n']
+    suitable_breaks = [b for b in paragraph_breaks if ideal_end - 100 <= b <= ideal_end + 100]
+    return max(suitable_breaks) if suitable_breaks else None
+
+
+def find_sentence_boundary(search_text: str, ideal_end: int) -> Optional[int]:
+    """Find sentence ending boundary."""
+    sentence_patterns = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
+    sentence_breaks = []
+    for pattern in sentence_patterns:
+        sentence_breaks.extend([
+            i + len(pattern) for i in range(len(search_text) - len(pattern)) 
+            if search_text[i:i+len(pattern)] == pattern
+        ])
+    suitable_breaks = [b for b in sentence_breaks if ideal_end - 50 <= b <= ideal_end + 50]
+    return max(suitable_breaks) if suitable_breaks else None
+
+
+def find_line_boundary(search_text: str, ideal_end: int) -> Optional[int]:
+    """Find line break boundary."""
+    line_breaks = [i + 1 for i, char in enumerate(search_text) if char == '\n']
+    suitable_breaks = [b for b in line_breaks if ideal_end - 30 <= b <= ideal_end + 30]
+    return max(suitable_breaks) if suitable_breaks else None
+
+
+def find_word_boundary(search_text: str, ideal_end: int) -> Optional[int]:
+    """Find word boundary."""
+    word_breaks = [i + 1 for i, char in enumerate(search_text) if char == ' ']
+    suitable_breaks = [b for b in word_breaks if ideal_end - 20 <= b <= ideal_end + 20]
+    return max(suitable_breaks) if suitable_breaks else None
+
+
 class RagService:
     """
     Service for RAG operations combining embedding generation and vector search.
@@ -156,9 +190,10 @@ class RagService:
                     add_special_tokens=False
                 )
                 return encoding["offset_mapping"]
-            except:
-                # Fallback to manual computation
-                pass
+            except (ValueError, KeyError, TypeError) as e:
+                logger.warning("Built-in offset mapping failed, using fallback manual computation: %s", e)
+            except Exception as e:
+                logger.exception("Unexpected error during offset mapping, using fallback manual computation: %s", e)
             
             # Manual computation for HF tokenizers
             char_pos = 0
@@ -263,33 +298,19 @@ class RagService:
     
     def _find_paragraph_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
         """Find paragraph break boundary."""
-        paragraph_breaks = [i for i, char in enumerate(search_text) if search_text[i:i+2] == '\n\n']
-        suitable_breaks = [b for b in paragraph_breaks if ideal_end - 100 <= b <= ideal_end + 100]
-        return max(suitable_breaks) if suitable_breaks else None
+        return find_paragraph_boundary(search_text, ideal_end)
         
     def _find_sentence_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
         """Find sentence ending boundary."""
-        sentence_patterns = ['. ', '! ', '? ', '.\n', '!\n', '?\n']
-        sentence_breaks = []
-        for pattern in sentence_patterns:
-            sentence_breaks.extend([
-                i + len(pattern) for i in range(len(search_text) - len(pattern)) 
-                if search_text[i:i+len(pattern)] == pattern
-            ])
-        suitable_breaks = [b for b in sentence_breaks if ideal_end - 50 <= b <= ideal_end + 50]
-        return max(suitable_breaks) if suitable_breaks else None
+        return find_sentence_boundary(search_text, ideal_end)
         
     def _find_line_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
         """Find line break boundary."""
-        line_breaks = [i + 1 for i, char in enumerate(search_text) if char == '\n']
-        suitable_breaks = [b for b in line_breaks if ideal_end - 30 <= b <= ideal_end + 30]
-        return max(suitable_breaks) if suitable_breaks else None
+        return find_line_boundary(search_text, ideal_end)
         
     def _find_word_boundary(self, search_text: str, ideal_end: int) -> Optional[int]:
         """Find word boundary."""
-        word_breaks = [i + 1 for i, char in enumerate(search_text) if char == ' ']
-        suitable_breaks = [b for b in word_breaks if ideal_end - 20 <= b <= ideal_end + 20]
-        return max(suitable_breaks) if suitable_breaks else None
+        return find_word_boundary(search_text, ideal_end)
         
     def _find_semantic_boundary(
         self, 
@@ -331,7 +352,7 @@ class RagService:
                 if self.tokenizer_type == "qwen":
                     adjusted_tokens = self.tokenizer.encode(
                         full_text[start_char:start_char + best_break], 
-                        add_special_tokens=False
+                        add_special_tokens=add_special_tokens
                     )
                 else:  # tiktoken
                     adjusted_tokens = self.tokenizer.encode(

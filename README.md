@@ -157,12 +157,12 @@ graph TB
     C --> F[HF TEI Server]
     F --> G[Qwen3-Embedding-0.6B]
     E --> H[Vector Search]
-    
+
     subgraph "Docker Services"
         E
         F
     end
-    
+
     subgraph "MCP Tools"
         I[scrape]
         J[crawl]
@@ -208,7 +208,7 @@ TEI_URL=http://localhost:8080
 TEI_BATCH_SIZE=64
 TEI_MAX_CONCURRENT_REQUESTS=128
 
-# Crawling Behavior  
+# Crawling Behavior
 CRAWL_MAX_PAGES=1000
 CRAWL_MAX_DEPTH=3
 MAX_CONCURRENT_CRAWLS=25
@@ -311,7 +311,7 @@ The included `docker-compose.yml` provides production-ready services:
 - **Knowledge Management**: Build searchable internal knowledge bases
 
 ### 💻 Software Development
-- **Code Analysis**: Analyze GitHub repositories and codebases  
+- **Code Analysis**: Analyze GitHub repositories and codebases
 - **API Documentation**: Extract and search API reference materials
 - **Open Source Discovery**: Find relevant libraries and tools
 
@@ -323,7 +323,7 @@ The included `docker-compose.yml` provides production-ready services:
 ## 🛡️ Security & Privacy
 
 - **Input Sanitization**: Comprehensive input validation and sanitization
-- **Rate Limiting**: Configurable request throttling and abuse prevention  
+- **Rate Limiting**: Configurable request throttling and abuse prevention
 - **Network Isolation**: Docker network isolation for service security
 - **Audit Logging**: Comprehensive operation logging for compliance
 - **No Data Retention**: Optional mode for privacy-focused deployments
@@ -358,7 +358,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)  
+4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
 ## 📞 Support & Community
@@ -370,7 +370,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - [FastMCP](https://github.com/jlowin/fastmcp) - Modern MCP server framework
-- [Crawl4AI](https://github.com/unclecode/crawl4ai) - AI-optimized web crawler  
+- [Crawl4AI](https://github.com/unclecode/crawl4ai) - AI-optimized web crawler
 - [Qdrant](https://qdrant.tech/) - Vector similarity search engine
 - [Qwen Team](https://github.com/QwenLM) - Multilingual embedding models
 - [Hugging Face](https://huggingface.co/) - Text Embeddings Inference

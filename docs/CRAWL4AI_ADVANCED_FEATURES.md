@@ -135,7 +135,7 @@ Control   Phase       Phase          Processing         Extraction
 
 ### From ~25% to 95%+ Crawl4AI Feature Utilization
 1. **Intelligent URL Discovery**: No longer limited to manual URL lists
-2. **AI-Powered Content Selection**: Quality over quantity approach  
+2. **AI-Powered Content Selection**: Quality over quantity approach
 3. **Modern Website Support**: Handles dynamic content and infinite scroll
 4. **Resource-Aware Processing**: Scales efficiently with available resources
 5. **Multi-Strategy Extraction**: Adapts extraction method to content type
@@ -178,7 +178,7 @@ result = await crawl_repo(
 ## 🎯 Success Criteria - ACHIEVED ✅
 
 - ✅ All existing tools work with the same interface (backward compatibility)
-- ✅ Significantly improved crawling intelligence and efficiency  
+- ✅ Significantly improved crawling intelligence and efficiency
 - ✅ Proper use of all major Crawl4AI 0.7.0 features
 - ✅ No regression in existing functionality
 - ✅ Better handling of modern dynamic websites

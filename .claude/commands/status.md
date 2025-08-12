@@ -8,7 +8,7 @@ allowed-tools: Bash(git:*), Bash(ls:*), Bash(find:*), Bash(wc:*)
 ## Git Status
 Current git status: !`git status --porcelain`
 
-## Branch Information  
+## Branch Information
 Current branch: !`git branch --show-current`
 Recent commits: !`git log --oneline -5`
 

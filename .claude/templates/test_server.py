@@ -1,5 +1,5 @@
 import pytest
-from fastmcp import FastMCP, Client
+from fastmcp import Client, FastMCP
 
 # Import the server factory or instance from your main server file
 # from project_name.server import create_server

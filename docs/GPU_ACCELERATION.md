@@ -41,7 +41,7 @@ Add GPU settings to `crawlerr/config.py`:
 ```python
 class CrawlerrSettings(BaseSettings):
     # ... existing settings ...
-    
+
     # GPU Acceleration Configuration
     gpu_acceleration: bool = Field(default=True, env="GPU_ACCELERATION")
     crawl_gpu_enabled: bool = Field(default=True, env="CRAWL_GPU_ENABLED")
@@ -49,7 +49,7 @@ class CrawlerrSettings(BaseSettings):
         default="--use-gl=angle --use-angle=vulkan --enable-features=Vulkan --enable-gpu-rasterization --enable-zero-copy --ignore-gpu-blocklist",
         env="CHROME_GPU_FLAGS"
     )
-    
+
     # RTX 4070 Optimization
     gpu_memory_limit_mb: int = Field(default=6000, env="GPU_MEMORY_LIMIT_MB")  # Leave room for TEI
     gpu_concurrent_browsers: int = Field(default=4, env="GPU_CONCURRENT_BROWSERS")
@@ -84,22 +84,22 @@ class CrawlerService:
             "--disable-dev-shm-usage",
             "--disable-gpu-sandbox" if settings.crawl_headless else "",
         ]
-        
+
         # Add GPU acceleration flags if enabled
         gpu_args = []
         if settings.crawl_gpu_enabled and settings.gpu_acceleration:
             gpu_args = settings.chrome_gpu_flags.split()
             logger.info(f"🎮 GPU acceleration enabled with {len(gpu_args)} flags")
-        
+
         # RTX 4070 memory optimization
         memory_args = [
             f"--max-memory-usage={settings.gpu_memory_limit_mb}",
             "--memory-pressure-off",
             "--max_old_space_size=8192"
         ]
-        
+
         all_args = base_args + gpu_args + memory_args
-        
+
         self.browser_config = BrowserConfig(
             browser_type=settings.crawl_browser,
             headless=settings.crawl_headless,
@@ -216,17 +216,17 @@ async def check_gpu_acceleration():
         result = subprocess.run(['nvidia-smi'], capture_output=True, text=True)
         if result.returncode == 0:
             logger.info("🎮 NVIDIA GPU detected and available")
-            
+
             # Check GPU memory usage
             gpu_info = result.stdout
             if "text-embeddings-inference" in gpu_info:
                 logger.info("✅ TEI service using GPU")
-            
+
             return True
         else:
             logger.warning("⚠️ nvidia-smi failed - GPU may not be available")
             return False
-            
+
     except FileNotFoundError:
         logger.error("❌ NVIDIA drivers not found")
         return False

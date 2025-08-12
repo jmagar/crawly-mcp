@@ -23,21 +23,25 @@ mkdir -p logs
 echo -e "${BLUE}🚀 Crawlerr Development Server Manager${NC}"
 echo "=================================================="
 
-# Function to print colored output
+# Function to print colored output with consistent timestamp format
+get_timestamp() {
+    date "+%H:%M:%S"
+}
+
 log_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+    echo -e "[$(get_timestamp)] ${BLUE}ℹ️  $1${NC}"
 }
 
 log_success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "[$(get_timestamp)] ${GREEN}✅ $1${NC}"
 }
 
 log_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "[$(get_timestamp)] ${YELLOW}⚠️  $1${NC}"
 }
 
 log_error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "[$(get_timestamp)] ${RED}❌ $1${NC}"
 }
 
 # Function to check if our MCP server is running
@@ -67,7 +71,7 @@ stop_mcp_server() {
     if check_mcp_server; then
         local pid=$(cat "$PIDFILE")
         log_info "Stopping existing Crawlerr MCP server (PID: $pid)..."
-        
+
         # Send SIGTERM first (graceful shutdown)
         if kill "$pid" 2>/dev/null; then
             # Wait up to 10 seconds for graceful shutdown
@@ -76,14 +80,14 @@ stop_mcp_server() {
                 sleep 1
                 count=$((count + 1))
             done
-            
+
             # If still running, force kill
             if ps -p "$pid" > /dev/null 2>&1; then
                 log_warning "Graceful shutdown timed out, force killing..."
                 kill -9 "$pid" 2>/dev/null || true
             fi
         fi
-        
+
         # Clean up PID file
         rm -f "$PIDFILE"
         log_success "Previous server stopped"
@@ -95,40 +99,40 @@ stop_mcp_server() {
 # Function to check Docker Compose services
 check_docker_services() {
     log_info "Checking Docker Compose services..."
-    
+
     # Check if docker-compose.yml exists
     if [ ! -f "docker-compose.yml" ]; then
         log_error "docker-compose.yml not found in current directory"
         exit 1
     fi
-    
+
     # Check if services are running
     local qdrant_status=$(docker compose ps -q qdrant 2>/dev/null | wc -l)
     local tei_status=$(docker compose ps -q text-embeddings-inference 2>/dev/null | wc -l)
-    
+
     if [ "$qdrant_status" -eq 0 ] || [ "$tei_status" -eq 0 ]; then
         log_warning "Docker services not running, starting them..."
         docker compose up -d
-        
+
         # Wait for services to be healthy
         log_info "Waiting for services to be ready..."
         local max_attempts=60
         local attempt=0
-        
+
         while [ $attempt -lt $max_attempts ]; do
             local qdrant_health=$(docker compose ps qdrant --format json 2>/dev/null | grep -o '"Health":"[^"]*"' | cut -d'"' -f4)
             local tei_health=$(docker compose ps text-embeddings-inference --format json 2>/dev/null | grep -o '"Health":"[^"]*"' | cut -d'"' -f4)
-            
+
             if [[ "$qdrant_health" == "healthy" || "$qdrant_health" == "" ]] && [[ "$tei_health" == "healthy" ]]; then
                 log_success "All services are healthy"
                 break
             fi
-            
+
             echo -n "."
             sleep 2
             attempt=$((attempt + 1))
         done
-        
+
         if [ $attempt -eq $max_attempts ]; then
             log_error "Services did not become healthy within 2 minutes"
             log_info "Current service status:"
@@ -138,10 +142,10 @@ check_docker_services() {
     else
         log_success "Docker services are already running"
     fi
-    
+
     # Verify service connectivity
     log_info "Verifying service connectivity..."
-    
+
     # Test Qdrant
     if curl -sf http://localhost:6333/ >/dev/null; then
         log_success "Qdrant is accessible at http://localhost:6333"
@@ -149,7 +153,7 @@ check_docker_services() {
         log_error "Qdrant is not accessible at http://localhost:6333"
         exit 1
     fi
-    
+
     # Test TEI
     if curl -sf http://localhost:8080/info >/dev/null; then
         log_success "TEI is accessible at http://localhost:8080"
@@ -162,49 +166,53 @@ check_docker_services() {
 # Function to start the MCP server
 start_mcp_server() {
     log_info "Starting Crawlerr MCP server..."
-    
+
     # Check if virtual environment exists
     if [ ! -d ".venv" ]; then
         log_error "Virtual environment not found. Run 'uv sync' first."
         exit 1
     fi
-    
+
     # Check if server file exists
     if [ ! -f "crawlerr/server.py" ]; then
         log_error "Server file 'crawlerr/server.py' not found"
         exit 1
     fi
-    
+
     # Start the server in background and capture PID
     log_info "Starting Crawlerr MCP server directly..."
-    
+
+    # Set signal trap early to protect the background process
+    trap 'echo -e "\n${YELLOW}⚠️  Log streaming stopped. Server continues running in background.${NC}"; echo -e "${BLUE}ℹ️  Use '"'"'./dev.sh stop'"'"' to stop the server${NC}"; exit 0' SIGINT
+
     # Run the server directly with Python to respect .env configuration
+    # Use setsid to create a new session and detach from terminal
     # Unset conflicting VIRTUAL_ENV to prevent uv warnings
     unset VIRTUAL_ENV
-    nohup uv run python -m crawlerr.server \
+    setsid nohup uv run python -m crawlerr.server \
         > "$LOGFILE" 2>&1 &
-    
+
     local server_pid=$!
-    
+
     # Save PID to file
     echo "$server_pid" > "$PIDFILE"
-    
-    # Wait for port to be available
-    log_info "Waiting for port 8010 to be available..."
+
+    # Wait for port to become available (server to start)
+    log_info "Waiting for port 8010 to become available..."
     local port_attempts=0
-    while lsof -Pi :8010 -sTCP:LISTEN -t >/dev/null 2>&1 && [ $port_attempts -lt 20 ]; do
+    while ! lsof -Pi :8010 -sTCP:LISTEN -t >/dev/null 2>&1 && [ $port_attempts -lt 20 ]; do
         sleep 0.5
         port_attempts=$((port_attempts + 1))
     done
-    
+
     if [ $port_attempts -eq 20 ]; then
-        log_error "Port 8010 is still in use after 10 seconds"
+        log_error "Port 8010 did not become available after 10 seconds"
         exit 1
     fi
-    
-    # Wait a moment to check if server started successfully  
+
+    # Wait a moment to check if server started successfully
     sleep 2
-    
+
     if ps -p "$server_pid" > /dev/null 2>&1; then
         log_success "MCP server started successfully (PID: $server_pid)"
         log_info "Server logs: $LOGFILE"
@@ -213,8 +221,8 @@ start_mcp_server() {
         log_info "Following server logs (press Ctrl+C to exit):"
         log_info "To stop the server, run: $0 stop"
         echo ""
-        
-        # Tail the logs by default
+
+        # Tail the logs (trap already set above)
         tail -f "$LOGFILE"
     else
         log_error "Failed to start MCP server"
@@ -228,7 +236,7 @@ start_mcp_server() {
 show_status() {
     echo -e "${BLUE}📊 Server Status${NC}"
     echo "=================="
-    
+
     # MCP Server status
     if check_mcp_server; then
         local pid=$(cat "$PIDFILE")
@@ -236,28 +244,28 @@ show_status() {
     else
         log_info "MCP Server: Stopped"
     fi
-    
+
     # Docker services status
     echo ""
     log_info "Docker Services:"
     docker compose ps 2>/dev/null || log_warning "Docker Compose not available"
-    
+
     # Service health checks
     echo ""
     log_info "Service Health Checks:"
-    
+
     if curl -sf http://localhost:6333/ >/dev/null 2>&1; then
         log_success "Qdrant: Healthy (http://localhost:6333)"
     else
         log_warning "Qdrant: Not accessible"
     fi
-    
+
     if curl -sf http://localhost:8080/info >/dev/null 2>&1; then
         log_success "TEI: Healthy (http://localhost:8080)"
     else
         log_warning "TEI: Not accessible"
     fi
-    
+
     # Show recent logs if server is running
     if check_mcp_server && [ -f "$LOGFILE" ]; then
         echo ""

@@ -1,5 +1,6 @@
 services:
   qdrant:
+    container_name: crawly-qdrant
     image: qdrant/qdrant:v1.15.1
     ports:
       - "6333:6333"
@@ -21,7 +22,8 @@ services:
       - crawlerr-network
 
   text-embeddings-inference:
-    image: ghcr.io/huggingface/text-embeddings-inference:89-latest # Specific image for RTX 40xx series
+    image: ghcr.io/huggingface/text-embeddings-inference:1.8
+    container_name: crawly-embeddings
     ports:
       - "8080:80"
     volumes:
@@ -31,26 +33,27 @@ services:
       - Qwen/Qwen3-Embedding-0.6B
       - --dtype
       - float16
-      # Performance optimizations
       - --max-concurrent-requests
-      - "128"  # Increased from default 512 to handle more concurrent requests
+      - "256"
       - --max-batch-tokens
-      - "32768"  # Increased from default 16384 for better GPU utilization
+      - "131072"
       - --max-batch-requests
-      - "64"  # Limit individual requests in a batch
+      - "512"
       - --max-client-batch-size
-      - "128"  # Increased from default 32 for larger batches
+      - "512"
+      - --pooling
+      - "last-token"
       - --tokenization-workers
-      - "16"  # Optimize tokenization with more workers
-      - --auto-truncate  # Automatically truncate long inputs
-      # For modern GPUs like the RTX 4070, Flash Attention is often
-      # automatically enabled in the underlying libraries (PyTorch 2+).
-      # The latest TEI image includes these libraries. Explicitly setting a 
-      # flash attention flag is often not required and can cause issues if incorrect.
+      - "8"
+      - --auto-truncate
     environment:
-      # Additional performance tuning
+      - NVIDIA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=0
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      - OMP_NUM_THREADS=12
+      - TOKENIZERS_PARALLELISM=true
+      - CUDA_CACHE_DISABLE=0
+      - RUST_LOG=text_embeddings_router=info
       - HF_HUB_CACHE=/data/cache
     deploy:
       resources:

@@ -27,6 +27,7 @@ class CrawlerrSettings(BaseSettings):
     log_format: str = Field(default="console", alias="LOG_FORMAT")
     log_file: str | None = Field(default=None, alias="LOG_FILE")
     log_to_file: bool = Field(default=False, alias="LOG_TO_FILE")
+    pid_file: str = Field(default="logs/crawlerr.pid", alias="PID_FILE")
 
     # Qdrant Vector Database
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
@@ -115,7 +116,17 @@ class CrawlerrSettings(BaseSettings):
     crawl_score_threshold: float = Field(default=0.4, alias="CRAWL_SCORE_THRESHOLD")
     crawl_virtual_scroll: bool = Field(default=True, alias="CRAWL_VIRTUAL_SCROLL")
     crawl_scroll_count: int = Field(default=20, alias="CRAWL_SCROLL_COUNT")
-    crawl_memory_threshold: float = Field(default=90.0, alias="CRAWL_MEMORY_THRESHOLD")
+    crawl_memory_threshold: float = Field(default=70.0, alias="CRAWL_MEMORY_THRESHOLD")
+
+    # Performance Optimization Configuration
+    crawl_enable_streaming: bool = Field(default=True, alias="CRAWL_ENABLE_STREAMING")
+    crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
+    browser_pool_size: int = Field(default=10, alias="BROWSER_POOL_SIZE")
+    browser_warm_pool: bool = Field(default=True, alias="BROWSER_WARM_POOL")
+    gpu_monitor_interval: float = Field(default=30.0, alias="GPU_MONITOR_INTERVAL")
+    session_cache_size: int = Field(default=100, alias="SESSION_CACHE_SIZE")
+    session_cache_ttl: int = Field(default=3600, alias="SESSION_CACHE_TTL")
+    browser_recycle_after: int = Field(default=10, alias="BROWSER_RECYCLE_AFTER")
 
     # RTX 4070 GPU Acceleration Configuration
     gpu_acceleration: bool = Field(default=True, alias="GPU_ACCELERATION")
@@ -192,6 +203,13 @@ class CrawlerrSettings(BaseSettings):
         if v:
             log_path = Path(str(v)).expanduser()
             log_path.parent.mkdir(parents=True, exist_ok=True)
+        return v
+
+    @field_validator("pid_file", mode="before")
+    @classmethod
+    def create_pid_directory(cls, v: str) -> str:
+        pid_path = Path(str(v)).expanduser()
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
         return v
 
     model_config = SettingsConfigDict(

@@ -3,8 +3,9 @@ Configuration management for Crawlerr using Pydantic Settings.
 """
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Constants for error messages
@@ -36,7 +37,9 @@ class CrawlerrSettings(BaseSettings):
         default="crawlerr_documents", alias="QDRANT_COLLECTION"
     )
     qdrant_vector_size: int = Field(default=1024, alias="QDRANT_VECTOR_SIZE")
-    qdrant_distance: str = Field(default="cosine", alias="QDRANT_DISTANCE")
+    qdrant_distance: Literal["cosine", "euclidean", "dot"] = Field(
+        default="cosine", alias="QDRANT_DISTANCE"
+    )
     qdrant_timeout: float = Field(default=10.0, alias="QDRANT_TIMEOUT")
     qdrant_retry_count: int = Field(default=3, alias="QDRANT_RETRY_COUNT")
 
@@ -57,9 +60,9 @@ class CrawlerrSettings(BaseSettings):
     embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
 
     # Chunking Configuration
-    chunk_size: int = Field(default=512, alias="CHUNK_SIZE")
-    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP")
-    word_to_token_ratio: float = Field(default=1.4, alias="WORD_TO_TOKEN_RATIO")
+    chunk_size: int = Field(default=1024, alias="CHUNK_SIZE", gt=0, le=32768)
+    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP", ge=0)
+    word_to_token_ratio: float = Field(default=1.4, alias="WORD_TO_TOKEN_RATIO", gt=0)
 
     # Reranker Configuration
     reranker_model: str = Field(
@@ -80,6 +83,8 @@ class CrawlerrSettings(BaseSettings):
         if not v or not str(v).strip():
             raise ValueError(RERANKER_MODEL_ERROR)
         return v
+
+    # GPU flag validation removed - no longer using custom Chrome flags
 
     # Crawling Configuration
     crawl_headless: bool = Field(default=True, alias="CRAWL_HEADLESS")
@@ -121,40 +126,21 @@ class CrawlerrSettings(BaseSettings):
     # Performance Optimization Configuration
     crawl_enable_streaming: bool = Field(default=True, alias="CRAWL_ENABLE_STREAMING")
     crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
-    browser_pool_size: int = Field(default=10, alias="BROWSER_POOL_SIZE")
-    browser_warm_pool: bool = Field(default=True, alias="BROWSER_WARM_POOL")
-    gpu_monitor_interval: float = Field(default=30.0, alias="GPU_MONITOR_INTERVAL")
-    session_cache_size: int = Field(default=100, alias="SESSION_CACHE_SIZE")
-    session_cache_ttl: int = Field(default=3600, alias="SESSION_CACHE_TTL")
-    browser_recycle_after: int = Field(default=10, alias="BROWSER_RECYCLE_AFTER")
+    # Browser pooling removed - using direct AsyncWebCrawler instances
 
     # RTX 4070 GPU Acceleration Configuration
-    gpu_acceleration: bool = Field(default=True, alias="GPU_ACCELERATION")
-    crawl_gpu_enabled: bool = Field(default=True, alias="CRAWL_GPU_ENABLED")
-    chrome_gpu_flags: str = Field(
-        default=(
-            "--use-gl=angle --use-angle=vulkan --enable-features=Vulkan "
-            "--enable-gpu-rasterization --enable-zero-copy "
-            "--ignore-gpu-blocklist --disable-gpu-sandbox"
-        ),
-        alias="CHROME_GPU_FLAGS",
+    gpu_acceleration: bool = Field(
+        default=True,
+        alias="GPU_ACCELERATION",
+        description="Enable GPU acceleration features",
     )
-    chrome_advanced_gpu_flags: str = Field(
-        default=(
-            "--enable-hardware-overlays --enable-unsafe-webgpu "
-            "--enable-accelerated-2d-canvas"
-        ),
-        alias="CHROME_ADVANCED_GPU_FLAGS",
+    crawl_gpu_enabled: bool = Field(
+        default=True,
+        alias="CRAWL_GPU_ENABLED",
+        description="Enable GPU acceleration for web crawling",
     )
-    gpu_memory_limit_mb: int = Field(
-        default=5000, alias="GPU_MEMORY_LIMIT_MB"
-    )  # Conservative for RTX 4070 (12GB total)
-    gpu_concurrent_browsers: int = Field(default=4, alias="GPU_CONCURRENT_BROWSERS")
-    gpu_health_check_enabled: bool = Field(
-        default=True, alias="GPU_HEALTH_CHECK_ENABLED"
-    )
-    gpu_fallback_enabled: bool = Field(default=True, alias="GPU_FALLBACK_ENABLED")
-    gpu_force_enable: bool = Field(default=False, alias="GPU_FORCE_ENABLE")
+    # Chrome flags removed - Crawl4AI light_mode handles optimization
+    # GPU management removed - let Crawl4AI handle GPU acceleration
 
     # URL Pattern Exclusions
     crawl_exclude_url_patterns: list[str] = Field(
@@ -212,12 +198,32 @@ class CrawlerrSettings(BaseSettings):
         pid_path.parent.mkdir(parents=True, exist_ok=True)
         return v
 
+    @model_validator(mode="after")
+    def _validate_chunking(self) -> "CrawlerrSettings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("CHUNK_OVERLAP must be less than CHUNK_SIZE")
+        if self.chunk_size > self.embedding_max_length:
+            raise ValueError("CHUNK_SIZE must be <= EMBEDDING_MAX_LENGTH")
+        return self
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",  # Ignore deprecated settings for backward compatibility
     )
 
 
-# Global settings instance
-settings = CrawlerrSettings()
+# Lazy settings accessor (avoids import-time side effects)
+_settings: CrawlerrSettings | None = None
+
+
+def get_settings() -> CrawlerrSettings:
+    global _settings
+    if _settings is None:
+        _settings = CrawlerrSettings()
+    return _settings
+
+
+# For backward compatibility
+settings = get_settings()

@@ -9,11 +9,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .crawl_models import calculate_word_count_validator
+
 
 class DocumentChunk(BaseModel):
     model_config = ConfigDict()
 
     """A chunk of document content with metadata."""
+
     id: str
     content: str
     embedding: list[float] | None = None
@@ -25,14 +28,9 @@ class DocumentChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    @field_validator("word_count", mode="before")
-    @classmethod
-    def calculate_word_count(cls, v: int, info: Any) -> int:
-        if v == 0 and info.data and "content" in info.data:
-            content = info.data["content"]
-            if content:
-                return len(content.split())
-        return v
+    _validate_word_count = field_validator("word_count", mode="before")(
+        calculate_word_count_validator
+    )
 
     @field_validator("char_count", mode="before")
     @classmethod
@@ -48,6 +46,7 @@ class SearchMatch(BaseModel):
     model_config = ConfigDict()
 
     """A search result match with similarity score."""
+
     document: DocumentChunk
     score: float = Field(ge=0.0, le=1.0)
     relevance: str = Field(default="medium")  # low, medium, high
@@ -71,6 +70,7 @@ class RagQuery(BaseModel):
     model_config = ConfigDict()
 
     """Query for RAG search operations."""
+
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(default=10, ge=1, le=100)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -92,6 +92,7 @@ class EmbeddingResult(BaseModel):
     model_config = ConfigDict()
 
     """Result of embedding generation."""
+
     text: str
     embedding: list[float]
     model: str
@@ -112,6 +113,7 @@ class RagResult(BaseModel):
     model_config = ConfigDict()
 
     """Result of a RAG query operation."""
+
     query: str
     matches: list[SearchMatch] = Field(default_factory=list)
     total_matches: int = 0

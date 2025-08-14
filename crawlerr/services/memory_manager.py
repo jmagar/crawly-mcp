@@ -67,7 +67,7 @@ class MemoryManager:
         # Use cached result if recent (within 5 seconds) and not forcing
         if not force_check and current_time - self._last_check < 5.0:
             cached_percent = self._cached_memory_info.get("memory_percent", 0)
-            return cached_percent > self.threshold_percent
+            return bool(cached_percent > self.threshold_percent)
 
         self._last_check = current_time
         self._total_checks += 1
@@ -168,8 +168,8 @@ class MemoryManager:
         if not self.available:
             return {"available": False, "error": "psutil not available"}
 
-        # Force fresh check
-        asyncio.create_task(self.check_memory_pressure(force_check=True))
+        # Force fresh check (don't await - let it run in background)
+        asyncio.create_task(self.check_memory_pressure(force_check=True))  # noqa: RUF006
 
         return {
             **self._cached_memory_info,
@@ -197,8 +197,8 @@ class MemoryManager:
         # Page content memory (with processing overhead factor of 3x)
         content_mb = (page_count * avg_page_size_kb * 3) / 1024
 
-        # Browser memory per concurrent browser
-        browser_mb = settings.gpu_concurrent_browsers * 100  # ~100MB per browser
+        # Browser memory (single AsyncWebCrawler instance)
+        browser_mb = 100  # ~100MB per browser instance
 
         total_mb = base_overhead_mb + content_mb + browser_mb
 
@@ -225,7 +225,7 @@ class MemoryManager:
 
         # Get current memory state
         await self.check_memory_pressure(force_check=True)
-        available_gb = self._cached_memory_info.get("memory_available_gb", 0)
+        available_gb = float(self._cached_memory_info.get("memory_available_gb", 0))
         available_mb = available_gb * 1024
 
         # Keep 25% buffer for system and other processes

@@ -5,7 +5,7 @@ Base content extraction strategy.
 import logging
 from abc import ABC, abstractmethod
 
-from crawl4ai.extraction_strategy import ExtractionStrategy
+from crawl4ai.extraction_strategy import ExtractionStrategy  # type: ignore
 
 logger = logging.getLogger(__name__)
 

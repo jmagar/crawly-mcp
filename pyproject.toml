@@ -47,6 +47,7 @@ dependencies = [
     "transformers>=4.55.0",
     "sentence-transformers>=5.1.0",
     "torch>=2.8.0",
+    "types-psutil>=7.0.0.20250801",
 ]
 
 [project.optional-dependencies]

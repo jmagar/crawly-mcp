@@ -312,48 +312,29 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
             # Process with RAG if requested
             if process_with_rag:
-                await ctx.info("Processing for RAG indexing")
                 await ctx.report_progress(progress=3, total=4)
+                # Create a minimal crawl result for RAG processing
+                from ..models.crawl_models import (
+                    CrawlResult,
+                    CrawlStatistics,
+                    CrawlStatus,
+                )
 
-                try:
-                    # Create a minimal crawl result for RAG processing
-                    from ..models.crawl_models import (
-                        CrawlResult,
-                        CrawlStatistics,
-                        CrawlStatus,
-                    )
-
-                    crawl_result = CrawlResult(
-                        request_id="single_scrape",
-                        status=CrawlStatus.COMPLETED,
-                        urls=[url],
-                        pages=[page_content],
-                        statistics=CrawlStatistics(
-                            total_pages_requested=1,
-                            total_pages_crawled=1,
-                            total_bytes_downloaded=len(page_content.content),
-                        ),
-                    )
-
-                    # Process for RAG
-                    async with RagService() as rag_service:
-                        rag_stats = await rag_service.process_crawl_result(crawl_result)
-                        result["rag_processing"] = rag_stats
-
-                    # Register with source service
-                    async with SourceService() as source_service:
-                        sources = await source_service.register_crawl_result(
-                            crawl_result, SourceType.WEBPAGE
-                        )
-                        result["sources_registered"] = len(sources)
-
-                    await ctx.info(
-                        f"Processed {rag_stats.get('chunks_created', 0)} chunks for RAG indexing"
-                    )
-
-                except Exception as e:
-                    await ctx.info(f"RAG processing failed: {e!s}")
-                    result["rag_processing_error"] = str(e)
+                crawl_result = CrawlResult(
+                    request_id="single_scrape",
+                    status=CrawlStatus.COMPLETED,
+                    urls=[url],
+                    pages=[page_content],
+                    statistics=CrawlStatistics(
+                        total_pages_requested=1,
+                        total_pages_crawled=1,
+                        total_bytes_downloaded=len(page_content.content),
+                    ),
+                )
+                rag_info = await _process_rag_if_requested(
+                    ctx, crawl_result, SourceType.WEBPAGE, process_with_rag=True
+                )
+                result.update(rag_info)
 
             await ctx.info("Scraping completed")
             await ctx.report_progress(progress=4, total=4)
@@ -447,12 +428,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 )
 
                 # Progress callback for directory crawler
-                async def dir_progress(
+                def dir_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    await ctx.report_progress(progress=current, total=total)
-                    if message:
-                        await ctx.info(message)
+                    # Note: These callbacks are expected to be sync functions
+                    # Progress reporting will be handled at a higher level
+                    pass
 
                 crawl_result = await crawler_service.crawl_directory(
                     directory_path=type_params["directory_path"],
@@ -466,12 +447,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 await ctx.info(f"Starting repository crawl: {type_params['repo_url']}")
 
                 # Progress callback for repository crawler
-                async def repo_progress(
+                def repo_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    await ctx.report_progress(progress=current, total=total)
-                    if message:
-                        await ctx.info(message)
+                    # Note: These callbacks are expected to be sync functions
+                    # Progress reporting will be handled at a higher level
+                    pass
 
                 crawl_result = await crawler_service.crawl_repository(
                     repo_url=type_params["repo_url"],
@@ -507,11 +488,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 )
 
                 # Progress callback for web crawler
-                async def web_progress(
+                def web_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    progress = 2 + int((current / total) * 6)  # Progress 2-8
-                    await ctx.report_progress(progress=progress, total=10)
+                    # Note: These callbacks are expected to be sync functions
+                    # Progress reporting will be handled at a higher level
+                    pass
 
                 await ctx.report_progress(progress=1, total=10)
                 crawl_result = await crawler_service.crawl_website(

@@ -93,35 +93,6 @@ class RagService:
         self.embedding_service = EmbeddingService()
         self.vector_service = VectorService()
 
-        # Use token-based chunking for better semantic boundaries
-        self.chunk_size = settings.chunk_size  # Tokens per chunk (configurable)
-        self.chunk_overlap = (
-            settings.chunk_overlap
-        )  # Token overlap between chunks (configurable)
-        self.tokenizer_type = "token"
-
-        # Initialize tokenizer for token-based chunking (Qwen3 compatible)
-        try:
-            from transformers import AutoTokenizer
-
-            self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
-            logger.info(
-                "Using token-based chunking with Qwen3 tokenizer for optimal compatibility"
-            )
-        except ImportError:
-            logger.warning(
-                "transformers not available, using approximate token-based chunking"
-            )
-            self.tokenizer = None
-            # Keep token-based settings, use approximate token counting
-        except Exception as e:
-            logger.warning(
-                "Failed to load Qwen3 tokenizer: %s. Using approximate token-based chunking",
-                e,
-            )
-            self.tokenizer = None
-            # Keep token-based settings, use approximate token counting
-
         # Initialize Qwen3 reranker with GPU optimization
         self.reranker = None
         self.reranker_type = "none"
@@ -181,7 +152,10 @@ class RagService:
         return self
 
     async def __aexit__(
-        self, exc_type: type, exc_val: Exception, exc_tb: object
+        self,
+        exc_type: type,
+        exc_val: Exception,
+        exc_tb: object,
     ) -> None:
         """Async context manager exit with reference counting."""
         if RagService._lock is None:
@@ -215,27 +189,6 @@ class RagService:
             "vector_service": await self.vector_service.health_check(),
         }
 
-    def chunk_text(
-        self, text: str, metadata: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        """
-        Split text into overlapping chunks for embedding using token-based or character-based chunking.
-
-        Args:
-            text: Text to chunk
-            metadata: Additional metadata for chunks
-
-        Returns:
-            List of chunk dictionaries with text and metadata
-        """
-        if not text.strip():
-            return []
-
-        if self.tokenizer_type == "token" and self.tokenizer:
-            return self._chunk_text_token_based(text, metadata)
-        else:
-            return self._chunk_text_character_based(text, metadata)
-
     def _find_paragraph_boundary(self, search_text: str, ideal_end: int) -> int | None:
         """Find paragraph break boundary."""
         return find_paragraph_boundary(search_text, ideal_end)
@@ -253,7 +206,9 @@ class RagService:
         return find_word_boundary(search_text, ideal_end)
 
     def _chunk_text_character_based(
-        self, text: str, metadata: dict[str, Any] | None = None
+        self,
+        text: str,
+        metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Optimized character-based chunking with semantic boundary detection.
@@ -312,7 +267,9 @@ class RagService:
         return chunks
 
     def _chunk_text_token_based(
-        self, text: str, metadata: dict[str, Any] | None = None
+        self,
+        text: str,
+        metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Token-based chunking using Qwen3 tokenizer for optimal semantic boundaries.
@@ -331,6 +288,18 @@ class RagService:
 
                 # Extract token chunk
                 chunk_tokens = tokens[start_token:end_token]
+
+                # Ensure chunk_tokens is a flat list of integers
+                if (
+                    isinstance(chunk_tokens, list)
+                    and len(chunk_tokens) > 0
+                    and isinstance(chunk_tokens[0], list)
+                ):
+                    # Flatten nested list
+                    chunk_tokens = [
+                        token for sublist in chunk_tokens for token in sublist
+                    ]
+
                 chunk_text = self.tokenizer.decode(chunk_tokens)
 
                 if chunk_text.strip():
@@ -447,38 +416,22 @@ class RagService:
                         f"Processing page {i + 1}/{total_pages}: {page.url}",
                     )
 
-                # Chunk the page content
-                chunks = self.chunk_text(
-                    page.content,
-                    metadata={
-                        "source_url": page.url,
-                        "source_title": page.title,
-                        "page_metadata": page.metadata,
-                    },
+                # Each page is now a chunk from crawl4ai
+                chunk_id = f"{uuid.uuid4()}"
+                chunk_metadata = page.metadata.get("chunk_metadata", {})
+
+                doc_chunk = DocumentChunk(
+                    id=chunk_id,
+                    content=page.content,
+                    source_url=page.url,
+                    source_title=page.title,
+                    chunk_index=chunk_metadata.get("chunk_index", i),
+                    word_count=page.word_count,
+                    char_count=len(page.content),
+                    metadata=page.metadata,
                 )
-
-                total_chunks += len(chunks)
-
-                # Create DocumentChunk objects for each chunk
-                for chunk_data in chunks:
-                    chunk_id = f"{uuid.uuid4()}"
-
-                    doc_chunk = DocumentChunk(
-                        id=chunk_id,
-                        content=chunk_data["text"],
-                        source_url=chunk_data["source_url"],
-                        source_title=chunk_data.get("source_title"),
-                        chunk_index=chunk_data["chunk_index"],
-                        word_count=chunk_data["word_count"],
-                        char_count=chunk_data["char_count"],
-                        metadata={
-                            "start_pos": chunk_data["start_pos"],
-                            "end_pos": chunk_data["end_pos"],
-                            **chunk_data.get("page_metadata", {}),
-                        },
-                    )
-
-                    document_chunks.append(doc_chunk)
+                document_chunks.append(doc_chunk)
+                total_chunks += 1
 
             except Exception as e:
                 logger.error(f"Error processing page {page.url}: {e}")
@@ -629,7 +582,10 @@ class RagService:
             raise ToolError(f"RAG query failed: {e!s}") from e
 
     async def _rerank_results(
-        self, query: str, matches: list[SearchMatch], top_k: int | None = None
+        self,
+        query: str,
+        matches: list[SearchMatch],
+        top_k: int | None = None,
     ) -> list[SearchMatch]:
         """
         Re-rank search results using Qwen3 reranker or custom algorithm.
@@ -659,7 +615,10 @@ class RagService:
             return matches
 
     async def _rerank_with_qwen3(
-        self, query: str, matches: list[SearchMatch], top_k: int | None = None
+        self,
+        query: str,
+        matches: list[SearchMatch],
+        top_k: int | None = None,
     ) -> list[SearchMatch]:
         """
         Re-rank using Qwen3 CrossEncoder reranker.
@@ -724,7 +683,10 @@ class RagService:
             return matches
 
     async def _rerank_with_custom_algorithm(
-        self, query: str, matches: list[SearchMatch], top_k: int | None = None
+        self,
+        query: str,
+        matches: list[SearchMatch],
+        top_k: int | None = None,
     ) -> list[SearchMatch]:
         """
         Re-rank using custom hybrid scoring algorithm (original implementation).

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ...models.crawl_models import (
@@ -14,7 +15,6 @@ from ...models.crawl_models import (
     CrawlStatus,
     PageContent,
 )
-from ..memory_manager import get_memory_manager
 from .base_strategy import BaseCrawlStrategy
 
 logger = logging.getLogger(__name__)
@@ -40,15 +40,6 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
     """
     Intelligent directory processing with relevance scoring and batch optimization.
     """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.memory_manager = None
-
-    async def _initialize_managers(self) -> None:
-        """Initialize required managers."""
-        if not self.memory_manager:
-            self.memory_manager = get_memory_manager()
 
     async def validate_request(self, request: DirectoryRequest) -> bool:
         """Validate directory crawl request."""
@@ -110,6 +101,8 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 files = files[: request.max_files]
 
             # Memory check
+            if self.memory_manager is None:
+                raise RuntimeError("Memory manager not initialized")
             if not await self.memory_manager.can_handle_crawl(
                 len(files), avg_page_size_kb=50
             ):
@@ -137,15 +130,18 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 # Process batch
                 batch_results = await self._process_file_batch(batch_files, directory)
 
-                for result in batch_results:
-                    if isinstance(result, PageContent):
-                        pages.append(result)
-                        total_bytes += len(result.content)
+                for batch_result in batch_results:
+                    if isinstance(batch_result, PageContent):
+                        pages.append(batch_result)
+                        total_bytes += len(batch_result.content)
                     else:
-                        errors.append(str(result))
+                        errors.append(str(batch_result))
 
                 # Memory pressure check
-                if await self.memory_manager.check_memory_pressure():
+                if (
+                    self.memory_manager
+                    and await self.memory_manager.check_memory_pressure()
+                ):
                     self.logger.warning(
                         "Memory pressure detected during directory processing"
                     )
@@ -160,7 +156,7 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
             files_per_second = (
                 len(pages) / processing_duration if processing_duration > 0 else 0
             )
-            success_rate = len(pages) / len(files) if files else 0
+            # success_rate calculated as property on CrawlResult
 
             statistics = CrawlStatistics(
                 total_pages_requested=len(files),
@@ -181,7 +177,6 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 pages=pages,
                 errors=errors,
                 statistics=statistics,
-                success_rate=success_rate,
             )
 
             self.logger.info(
@@ -210,7 +205,7 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
         self, directory: Path, request: DirectoryRequest
     ) -> list[Path]:
         """Discover files matching patterns with relevance scoring."""
-        files = []
+        files: list[Path] = []
 
         try:
             if request.recursive:
@@ -434,7 +429,8 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                     return Exception(f"Error processing {file_path}: {e}")
 
         tasks = [process_single_file(file_path) for file_path in files]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return [r for r in results if isinstance(r, PageContent | Exception)]
 
     async def _process_single_file(
         self, file_path: Path, base_directory: Path
@@ -476,25 +472,11 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 links=[],  # Could extract file references in future
                 images=[],
                 metadata=metadata,
-                timestamp=time.time(),
-                word_count=metadata["word_count"],
+                timestamp=datetime.fromtimestamp(time.time()),
+                word_count=int(str(metadata.get("word_count", 0))),
             )
 
             return page_content
 
         except Exception as e:
-            raise Exception(f"Failed to process file {file_path}: {e}")
-
-    async def pre_execute_setup(self) -> None:
-        """Setup before directory processing begins."""
-        await self._initialize_managers()
-
-        # Optimize memory for processing
-        if self.memory_manager:
-            await self.memory_manager.optimize_for_crawl()
-
-    async def post_execute_cleanup(self) -> None:
-        """Cleanup after directory processing completes."""
-        # Force memory cleanup
-        if self.memory_manager:
-            await self.memory_manager.check_memory_pressure(force_check=True)
+            raise Exception(f"Failed to process file {file_path}: {e}") from e

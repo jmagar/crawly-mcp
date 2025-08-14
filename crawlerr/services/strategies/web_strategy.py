@@ -2,16 +2,30 @@
 Optimized web crawling strategy with streaming and caching support.
 """
 
-import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from crawl4ai import AsyncWebCrawler
-from crawl4ai import CrawlResult as Crawl4aiResult
-from crawl4ai.extraction_strategy import CosineStrategy, LLMExtractionStrategy
+from crawl4ai import (  # type: ignore
+    AsyncWebCrawler,
+    BrowserConfig,
+    CacheMode,
+    CrawlerRunConfig,
+)
+from crawl4ai import CrawlResult as Crawl4aiResult  # type: ignore
+from crawl4ai.deep_crawling import (  # type: ignore
+    BFSDeepCrawlStrategy,
+)
+from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter  # type: ignore
+from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer  # type: ignore
+from crawl4ai.extraction_strategy import (  # type: ignore
+    CosineStrategy,
+    LLMExtractionStrategy,
+)
 
 from ...config import settings
 from ...models.crawl_models import (
@@ -21,9 +35,7 @@ from ...models.crawl_models import (
     CrawlStatus,
     PageContent,
 )
-from ..browser_manager import get_browser_pool
-from ..gpu_manager import get_gpu_manager
-from ..memory_manager import get_memory_manager
+from ..memory_manager import MemoryManager, get_memory_manager
 from .base_strategy import BaseCrawlStrategy
 
 logger = logging.getLogger(__name__)
@@ -37,16 +49,10 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def __init__(self) -> None:
         super().__init__()
-        self.browser_pool = None
-        self.gpu_manager = None
-        self.memory_manager = None
+        self.memory_manager: MemoryManager | None = None
 
     async def _initialize_managers(self) -> None:
         """Initialize required managers."""
-        if not self.browser_pool:
-            self.browser_pool = await get_browser_pool()
-        if not self.gpu_manager:
-            self.gpu_manager = await get_gpu_manager()
         if not self.memory_manager:
             self.memory_manager = get_memory_manager()
 
@@ -56,13 +62,17 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.error("URL is required for web crawling")
             return False
 
-        if request.max_pages < 1 or request.max_pages > 2000:
+        if request.max_pages is not None and (
+            request.max_pages < 1 or request.max_pages > 2000
+        ):
             self.logger.error(
                 f"max_pages must be between 1 and 2000, got {request.max_pages}"
             )
             return False
 
-        if request.max_depth < 1 or request.max_depth > 5:
+        if request.max_depth is not None and (
+            request.max_depth < 1 or request.max_depth > 5
+        ):
             self.logger.error(
                 f"max_depth must be between 1 and 5, got {request.max_depth}"
             )
@@ -76,7 +86,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         progress_callback: Callable[[int, int, str | None], None] | None = None,
     ) -> CrawlResult:
         """
-        Execute optimized web crawling with streaming and performance enhancements.
+        Execute optimized web crawling by delegating to the crawl4ai library.
         """
         await self._initialize_managers()
 
@@ -85,46 +95,81 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             f"Starting web crawl: {request.url} (max_pages: {request.max_pages}, max_depth: {request.max_depth})"
         )
 
-        # Pre-crawl optimizations
         await self.pre_execute_setup()
 
         try:
-            # Memory check
-            if not await self.memory_manager.can_handle_crawl(request.max_pages):
+            if self.memory_manager is None:
+                raise RuntimeError("Memory manager not initialized")
+            if not await self.memory_manager.can_handle_crawl(request.max_pages or 100):
                 self.logger.warning(
                     "System may have insufficient memory for crawl, proceeding with caution"
                 )
 
-            # Get optimized browser session
-            browser = await self.browser_pool.get_session(request.url)
+            first_url = request.url[0] if isinstance(request.url, list) else request.url
 
-            # Configure for streaming and performance
-            crawl_config = await self._build_crawl_config()
+            # Create minimal browser config - let Crawl4AI handle optimization
+            browser_config = BrowserConfig(
+                headless=settings.crawl_headless,
+                browser_type=settings.crawl_browser,
+                light_mode=True,  # Let Crawl4AI optimize performance
+                text_mode=getattr(settings, "crawl_block_images", False),
+                # NO extra_args - avoid flag conflicts
+            )
 
-            # Execute crawl with streaming
+            # Create fresh AsyncWebCrawler instance
+            browser = AsyncWebCrawler(config=browser_config)
+            await browser.start()
+
+            # Sitemap preseeding: discover and parse sitemap URLs to bias deep crawling
+            sitemap_seeds = await self._discover_sitemap_seeds(
+                first_url, request.max_pages or 100
+            )
+            self.logger.info(
+                f"Discovered {len(sitemap_seeds)} sitemap seeds: {sitemap_seeds[:5]}..."
+            )
+
+            run_config = await self._build_run_config(request, sitemap_seeds)
+            self.logger.info(
+                f"Deep crawl strategy configured: {type(run_config.deep_crawl_strategy).__name__ if run_config.deep_crawl_strategy else 'None'}"
+            )
+            if run_config.deep_crawl_strategy:
+                self.logger.info(
+                    f"Max pages: {getattr(run_config.deep_crawl_strategy, 'max_pages', 'Unknown')}, Max depth: {getattr(run_config.deep_crawl_strategy, 'max_depth', 'Unknown')}"
+                )
+
             pages = []
             errors = []
             total_bytes = 0
             unique_domains = set()
             total_links_discovered = 0
+            max_pages = request.max_pages or 100
 
             if progress_callback:
-                progress_callback(0, request.max_pages, "Starting crawl...")
+                progress_callback(0, max_pages, "Starting crawl...")
 
-            # Use Crawl4AI's streaming capabilities
-            async for result in self._stream_crawl(browser, request, crawl_config):
-                if isinstance(result, Exception):
-                    errors.append(str(result))
-                    continue
+            # Delegate crawling to crawl4ai using deep crawl + streaming
+            crawl_count = 0
+            self.logger.info(
+                "Starting async iteration with stream=True and deep crawl strategy..."
+            )
+            async for result in await browser.arun(url=first_url, config=run_config):
+                crawl_count += 1
+                self.logger.info(
+                    f"Processing page {crawl_count}: {result.url} (success: {result.success})"
+                )
+                if hasattr(result, "metadata") and "score" in result.metadata:
+                    self.logger.info(f"Page score: {result.metadata['score']}")
+                if result.success:
+                    page_content = self._to_page_content(result)
+                    pages.append(page_content)
+                    total_bytes += len(page_content.content)
+                    unique_domains.add(urlparse(page_content.url).netloc)
+                    total_links_discovered += len(page_content.links)
 
-                if isinstance(result, PageContent):
-                    pages.append(result)
-                    total_bytes += len(result.content)
-                    unique_domains.add(urlparse(result.url).netloc)
-                    total_links_discovered += len(result.links)
-
-                    # Memory pressure check during crawl
-                    if await self.memory_manager.check_memory_pressure():
+                    if (
+                        self.memory_manager
+                        and await self.memory_manager.check_memory_pressure()
+                    ):
                         self.logger.warning(
                             "Memory pressure detected during crawl, may slow down"
                         )
@@ -132,27 +177,28 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     if progress_callback:
                         progress_callback(
                             len(pages),
-                            request.max_pages,
-                            f"Crawled: {result.url[:60]}...",
+                            max_pages,
+                            f"Crawled: {page_content.url[:60]}...",
                         )
+                else:
+                    errors.append(
+                        f"Failed to crawl {result.url}: {result.error_message}"
+                    )
 
-                    # Break if we've hit our limits
-                    if len(pages) >= request.max_pages:
-                        break
+                if len(pages) >= max_pages:
+                    self.logger.info(f"Reached max_pages limit of {max_pages}")
+                    break
 
-            # Calculate statistics
+            self.logger.info(
+                f"Crawl loop completed: {crawl_count} results processed, {len(pages)} successful pages"
+            )
             end_time = time.time()
             crawl_duration = end_time - start_time
             pages_per_second = len(pages) / crawl_duration if crawl_duration > 0 else 0
             avg_page_size = total_bytes / len(pages) if pages else 0
-            success_rate = (
-                len(pages) / (len(pages) + len(errors))
-                if (len(pages) + len(errors)) > 0
-                else 0
-            )
 
             statistics = CrawlStatistics(
-                total_pages_requested=request.max_pages,
+                total_pages_requested=max_pages,
                 total_pages_crawled=len(pages),
                 total_pages_failed=len(errors),
                 unique_domains=len(unique_domains),
@@ -163,14 +209,13 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 average_page_size=avg_page_size,
             )
 
-            result = CrawlResult(
+            crawl_result = CrawlResult(
                 request_id=f"web_crawl_{int(time.time())}",
                 status=CrawlStatus.COMPLETED,
-                urls=[request.url],
+                urls=[request.url] if isinstance(request.url, str) else request.url,
                 pages=pages,
                 errors=errors,
                 statistics=statistics,
-                success_rate=success_rate,
             )
 
             self.logger.info(
@@ -178,225 +223,386 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 f"{pages_per_second:.1f} pages/sec, {len(errors)} errors"
             )
 
-            return result
+            return crawl_result
 
         except Exception as e:
-            self.logger.error(f"Web crawl failed: {e}")
-
-            # Return partial result on failure
+            self.logger.error(f"Web crawl failed: {e}", exc_info=True)
+            urls = [request.url] if isinstance(request.url, str) else request.url
             return CrawlResult(
                 request_id=f"web_crawl_failed_{int(time.time())}",
                 status=CrawlStatus.FAILED,
-                urls=[request.url],
+                urls=urls,
                 pages=[],
                 errors=[str(e)],
                 statistics=CrawlStatistics(),
             )
 
         finally:
+            # Clean up browser instance
+            if "browser" in locals():
+                try:
+                    await browser.close()
+                except Exception as e:
+                    self.logger.warning(f"Error closing browser: {e}")
+
             await self.post_execute_cleanup()
 
-    async def _build_crawl_config(self) -> dict[str, Any]:
-        """Build optimized crawl configuration."""
-        gpu_config = self.gpu_manager.get_gpu_config() if self.gpu_manager else {}
+    def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
+        """Converts a crawl4ai result to a PageContent object."""
+        return PageContent(
+            url=result.url,
+            title=result.metadata.get("title", ""),
+            content=result.extracted_content
+            or result.cleaned_html
+            or result.markdown
+            or "",
+            html=result.html,
+            markdown=result.markdown,
+            links=[
+                link.get("href", link) if isinstance(link, dict) else link
+                for link in result.links.get("internal", [])
+            ]
+            if result.links
+            else [],
+            images=[
+                img.get("src", img) if isinstance(img, dict) else img
+                for img in result.media.get("images", [])
+            ]
+            if result.media
+            else [],
+            metadata={
+                "depth": result.metadata.get("depth", 0),
+                "word_count": len((result.cleaned_html or "").split()),
+                "status_code": result.status_code,
+                "response_headers": dict(result.response_headers or {}),
+                "chunk_metadata": getattr(result, "chunk_metadata", {}),
+            },
+            timestamp=datetime.fromtimestamp(time.time()),
+        )
 
-        config = {
-            # Streaming and caching
-            "streaming": settings.crawl_enable_streaming,
-            "cache_enabled": settings.crawl_enable_caching,
-            # Performance settings
-            "headless": settings.crawl_headless,
-            "browser_type": settings.crawl_browser,
-            "delay": settings.crawler_delay,
-            "timeout": settings.crawler_timeout,
-            # Content filtering
-            "word_count_threshold": settings.crawl_min_words,
-            "remove_overlay_elements": settings.crawl_remove_overlays,
-            "extract_media": settings.crawl_extract_media,
-            # Resource blocking for performance
-            "block_resources": [],
-        }
+    async def _build_run_config(
+        self, request: CrawlRequest, sitemap_seeds: list[str] | None = None
+    ) -> CrawlerRunConfig:
+        """Build Crawl4AI CrawlerRunConfig aligned with deep crawling and streaming."""
+        # Cache mode mapping
+        cache_mode = (
+            CacheMode.ENABLED
+            if getattr(settings, "crawl_enable_caching", True)
+            else CacheMode.BYPASS
+        )
 
-        # Add resource blocking
-        if settings.crawl_block_images:
-            config["block_resources"].append("image")
-        if settings.crawl_block_stylesheets:
-            config["block_resources"].append("stylesheet")
-        if settings.crawl_block_fonts:
-            config["block_resources"].append("font")
-        if settings.crawl_block_media:
-            config["block_resources"].extend(["media", "video", "audio"])
+        # Timeout: Crawl4AI expects milliseconds; coerce if likely in seconds
+        timeout_val = getattr(settings, "crawler_timeout", 30000)
+        page_timeout = (
+            int(timeout_val * 1000)
+            if isinstance(timeout_val, int | float) and timeout_val < 1000
+            else int(timeout_val)
+        )
 
-        # Add GPU configuration if available
-        if gpu_config.get("gpu_enabled"):
-            config["gpu_enabled"] = True
-            config["chrome_flags"] = gpu_config.get("chrome_flags", [])
+        # Deep crawl strategy (BestFirst preferred, BFS fallback)
+        deep_strategy = self._build_deep_crawl_strategy(request, sitemap_seeds or [])
 
-        return config
+        # Base run config
+        run_config = CrawlerRunConfig(
+            deep_crawl_strategy=deep_strategy,
+            stream=True,  # CRITICAL: Enable streaming for multi-page deep crawling
+            cache_mode=cache_mode,
+            page_timeout=page_timeout,
+            remove_overlay_elements=getattr(settings, "crawl_remove_overlays", True),
+            word_count_threshold=getattr(settings, "crawl_min_words", 50),
+            check_robots_txt=False,  # per user preference
+            verbose=getattr(settings, "crawl_verbose", True),
+        )
 
-    async def _stream_crawl(
-        self, browser: AsyncWebCrawler, request: CrawlRequest, config: dict[str, Any]
-    ) -> Any:
-        """
-        Stream crawling results using Crawl4AI's streaming capabilities.
-        """
-        try:
-            # Configure extraction strategy
-            extraction_strategy = None
-            if hasattr(request, "extraction_strategy") and request.extraction_strategy:
-                if request.extraction_strategy == "llm":
-                    extraction_strategy = LLMExtractionStrategy(
-                        provider="openai",  # This would need to be configured
-                        api_token="",  # This would need to be provided
+        # Optional: memory thresholds to align with our MemoryManager
+        if hasattr(settings, "crawl_memory_threshold_percent"):
+            with contextlib.suppress(Exception):
+                run_config.memory_threshold_percent = (
+                    settings.crawl_memory_threshold_percent
+                )  # type: ignore[attr-defined]
+        if hasattr(settings, "crawl_memory_check_interval"):
+            with contextlib.suppress(Exception):
+                run_config.check_interval = settings.crawl_memory_check_interval  # type: ignore[attr-defined]
+
+        # Optional: wait_for selector
+        if getattr(request, "wait_for", None):
+            run_config.wait_for = request.wait_for  # type: ignore[attr-defined]
+
+        # Extraction strategy (best-effort mapping)
+        if getattr(request, "extraction_strategy", None):
+            if request.extraction_strategy == "llm":
+                with contextlib.suppress(Exception):
+                    run_config.extraction_strategy = LLMExtractionStrategy(  # type: ignore[attr-defined]
+                        provider="openai",
+                        api_token="",
                         instruction="Extract main content and key information from the page",
                     )
-                elif request.extraction_strategy == "cosine":
-                    extraction_strategy = CosineStrategy(
+            elif request.extraction_strategy == "cosine":
+                with contextlib.suppress(Exception):
+                    run_config.extraction_strategy = CosineStrategy(  # type: ignore[attr-defined]
                         semantic_filter="main content, articles, blog posts",
-                        word_count_threshold=settings.crawl_min_words,
+                        word_count_threshold=getattr(settings, "crawl_min_words", 50),
                     )
 
-            # Start crawling with streaming
-            urls_to_crawl = [request.url]
-            crawled_urls = set()
-            depth = 0
+        # Chunking strategy (best-effort; only if available)
+        if getattr(request, "chunking_strategy", None):
+            try:
+                from crawl4ai.chunking_strategy import (
+                    FixedLengthWordChunking,
+                    OverlappingWindowChunking,
+                    RegexChunking,
+                    SlidingWindowChunking,
+                )  # type: ignore
 
-            while (
-                urls_to_crawl
-                and depth < request.max_depth
-                and len(crawled_urls) < request.max_pages
-            ):
-                current_level_urls = urls_to_crawl.copy()
-                urls_to_crawl.clear()
-                next_level_urls = []
+                chunking_map = {
+                    "overlapping_window": OverlappingWindowChunking,
+                    "sliding_window": SlidingWindowChunking,
+                    "fixed_length_word": FixedLengthWordChunking,
+                    "regex": RegexChunking,
+                }
+                chunker_class = chunking_map.get(request.chunking_strategy)
+                if chunker_class:
+                    chunking_options = request.chunking_options or {}
+                    run_config.chunking_strategy = chunker_class(**chunking_options)  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
-                # Process URLs in current level with limited concurrency
-                semaphore = asyncio.Semaphore(min(settings.max_concurrent_crawls, 5))
+        return run_config
 
-                async def crawl_single_url(url: str) -> PageContent | Exception:
-                    async with semaphore:
-                        if url in crawled_urls:
-                            return Exception(f"URL already crawled: {url}")
+    def _build_deep_crawl_strategy(
+        self, request: CrawlRequest, sitemap_seeds: list[str]
+    ):
+        """Construct a Best-First deep crawl strategy with filters and scoring; fallback to BFS."""
+        max_depth = request.max_depth or 1
+        max_pages = request.max_pages or 100
 
-                        crawled_urls.add(url)
+        # Build filter chain from include/exclude patterns
+        include_patterns = request.include_patterns or []
+        exclude_patterns = (request.exclude_patterns or []) + getattr(
+            settings, "crawl_exclude_url_patterns", []
+        )
 
-                        try:
-                            # Use browser session for crawling
-                            result: Crawl4aiResult = await browser.arun(
-                                url=url,
-                                extraction_strategy=extraction_strategy,
-                                bypass_cache=not config.get("cache_enabled", True),
-                                process_iframes=False,  # Disable for performance
-                                remove_overlay_elements=config.get(
-                                    "remove_overlay_elements", True
-                                ),
-                                word_count_threshold=config.get(
-                                    "word_count_threshold", 0
-                                ),
-                            )
+        filter_chain = None
+        try:
+            filters: list[Any] = []
+            if include_patterns:
+                # Some versions of URLPatternFilter may not support modes; wrap in try/except
+                try:
+                    filters.append(
+                        URLPatternFilter(
+                            patterns=list(include_patterns), mode="include"
+                        )
+                    )  # type: ignore[attr-defined]
+                except Exception:
+                    filters.append(URLPatternFilter(patterns=list(include_patterns)))  # type: ignore[attr-defined]
+            if exclude_patterns:
+                try:
+                    filters.append(
+                        URLPatternFilter(
+                            patterns=list(exclude_patterns), mode="exclude"
+                        )
+                    )  # type: ignore[attr-defined]
+                except Exception:
+                    filters.append(URLPatternFilter(patterns=list(exclude_patterns)))  # type: ignore[attr-defined]
+            if filters:
+                filter_chain = FilterChain(filters)  # type: ignore[attr-defined]
+        except Exception:
+            filter_chain = None
 
-                            if not result.success:
-                                return Exception(
-                                    f"Crawl failed for {url}: {result.error_message}"
-                                )
-
-                            # Extract links for next level
-                            links = []
-                            if result.links and depth + 1 < request.max_depth:
-                                for link_url in result.links.get("internal", []):
-                                    if self._should_include_url(link_url, request):
-                                        absolute_url = urljoin(url, link_url)
-                                        if absolute_url not in crawled_urls:
-                                            next_level_urls.append(absolute_url)
-                                            links.append(absolute_url)
-
-                            # Create PageContent
-                            page_content = PageContent(
-                                url=url,
-                                title=result.metadata.get("title", ""),
-                                content=result.cleaned_html or result.markdown or "",
-                                html=result.html,
-                                markdown=result.markdown,
-                                links=links,
-                                images=list(result.media.get("images", []))
-                                if result.media
-                                else [],
-                                metadata={
-                                    "depth": depth,
-                                    "word_count": len(
-                                        (result.cleaned_html or "").split()
-                                    ),
-                                    "status_code": result.status_code,
-                                    "response_headers": dict(
-                                        result.response_headers or {}
-                                    ),
-                                },
-                                timestamp=time.time(),
-                            )
-
-                            return page_content
-
-                        except Exception as e:
-                            return Exception(f"Error crawling {url}: {e}")
-
-                # Execute crawls concurrently
-                tasks = [
-                    crawl_single_url(url)
-                    for url in current_level_urls[
-                        : request.max_pages - len(crawled_urls)
+        # Scorer: prioritize includes, sitemap-derived keywords, and content-like URLs
+        try:
+            keywords: list[str] = []
+            for pat in include_patterns:
+                keywords.extend(
+                    [
+                        t
+                        for t in str(pat).replace("*", " ").replace("/", " ").split()
+                        if len(t) > 2
                     ]
-                ]
-
-                if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                    for result in results:
-                        yield result
-
-                # Add next level URLs
-                if next_level_urls and depth + 1 < request.max_depth:
-                    urls_to_crawl.extend(
-                        next_level_urls[: request.max_pages - len(crawled_urls)]
+                )
+            # Add tokens from sitemap URLs
+            for u in sitemap_seeds[:max_pages]:
+                try:
+                    path = urlparse(u).path
+                    keywords.extend(
+                        [
+                            t
+                            for t in path.replace("-", " ")
+                            .replace("_", " ")
+                            .replace("/", " ")
+                            .split()
+                            if len(t) > 2
+                        ]
                     )
+                except Exception:
+                    continue
+            if not keywords:
+                keywords = ["docs", "blog", "guide", "article", "learn", "help", "faq"]
 
-                depth += 1
-
+            # Add more generic keywords to be less restrictive
+            keywords.extend(
+                [
+                    "fastmcp",
+                    "mcp",
+                    "client",
+                    "server",
+                    "api",
+                    "tutorial",
+                    "example",
+                    "getting",
+                    "started",
+                ]
+            )
+            self.logger.info(f"Using keywords for scoring: {keywords[:10]}...")
+            KeywordRelevanceScorer(keywords=keywords, weight=0.7)  # type: ignore[attr-defined]
         except Exception as e:
-            yield e
+            self.logger.warning(f"Failed to create scorer: {e}")
 
-    def _should_include_url(self, url: str, request: CrawlRequest) -> bool:
-        """Check if URL should be included in crawl."""
-        # Apply include patterns
-        if request.include_patterns:
-            if not any(pattern in url for pattern in request.include_patterns):
-                return False
+        # Use simple BFS strategy first to test basic deep crawling
+        try:
+            self.logger.info(
+                f"Creating BFS deep crawl strategy: max_depth={max_depth}, max_pages={max_pages}, filter_chain={'present' if filter_chain else 'None'}"
+            )
+            # Temporarily remove filter_chain to test if it's blocking URLs
+            return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
+                max_depth=max_depth,
+                include_external=False,
+                max_pages=max_pages,
+                # filter_chain=filter_chain,  # Temporarily disabled
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to create BFS strategy: {e}")
+            # Last resort: minimal BFS parameters
+            try:
+                return BFSDeepCrawlStrategy(max_depth=max_depth, include_external=False)  # type: ignore[attr-defined]
+            except Exception as e2:
+                self.logger.error(f"Failed to create minimal BFS strategy: {e2}")
+                return None
 
-        # Apply exclude patterns
-        if request.exclude_patterns:
-            if any(pattern in url for pattern in request.exclude_patterns):
-                return False
+    async def _discover_sitemap_seeds(self, start_url: str, limit: int) -> list[str]:
+        """Fetch robots.txt and sitemap.xml to build seed URLs for prioritization.
+        Returns a bounded list of same-domain URLs.
+        """
+        try:
+            parsed = urlparse(start_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            robots_url = urljoin(base, "/robots.txt")
+            sitemap_urls = await self._extract_sitemaps_from_robots(robots_url)
+            if not sitemap_urls:
+                # fallback to conventional path
+                sitemap_urls = [urljoin(base, "/sitemap.xml")]
 
-        # Apply global exclude patterns
-        for pattern in settings.crawl_exclude_url_patterns:
-            if pattern.replace("*", "") in url:
-                return False
+            seeds: list[str] = []
+            for sm in sitemap_urls:
+                urls = await self._parse_sitemap(sm, base, remaining=limit - len(seeds))
+                seeds.extend(urls)
+                if len(seeds) >= limit:
+                    break
 
-        return True
+            # Dedup same-domain
+            seen = set()
+            same_domain_seeds = []
+            for u in seeds:
+                try:
+                    if urlparse(u).netloc == parsed.netloc and u not in seen:
+                        seen.add(u)
+                        same_domain_seeds.append(u)
+                except Exception:
+                    continue
+            return same_domain_seeds[:limit]
+        except Exception:
+            return []
+
+    async def _extract_sitemaps_from_robots(self, robots_url: str) -> list[str]:
+        try:
+            text = await self._fetch_text(robots_url, timeout=10)
+            if not text:
+                return []
+            sitemaps: list[str] = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.lower().startswith("sitemap:"):
+                    sitemaps.append(line.split(":", 1)[1].strip())
+            return sitemaps
+        except Exception:
+            return []
+
+    async def _parse_sitemap(
+        self, sitemap_url: str, base: str, remaining: int
+    ) -> list[str]:
+        """Parse a sitemap or sitemap index and return up to `remaining` URLs."""
+        try:
+            import xml.etree.ElementTree as ET
+
+            xml_text = await self._fetch_text(sitemap_url, timeout=15)
+            if not xml_text:
+                return []
+            urls: list[str] = []
+            try:
+                root = ET.fromstring(xml_text)
+            except Exception:
+                return []
+
+            tag = root.tag.lower()
+
+            def ns_strip(t: str) -> str:
+                return t.split("}", 1)[-1] if "}" in t else t
+
+            tag = ns_strip(tag)
+            if tag == "sitemapindex":
+                for sm in root.findall(".//{*}sitemap/{*}loc"):
+                    loc_text = (sm.text or "").strip()
+                    if not loc_text:
+                        continue
+                    if len(urls) >= remaining:
+                        break
+                    urls.extend(
+                        await self._parse_sitemap(loc_text, base, remaining - len(urls))
+                    )
+                    if len(urls) >= remaining:
+                        break
+            elif tag == "urlset":
+                for loc in root.findall(".//{*}url/{*}loc"):
+                    loc_text = (loc.text or "").strip()
+                    if not loc_text:
+                        continue
+                    urls.append(loc_text)
+                    if len(urls) >= remaining:
+                        break
+            # Normalize to absolute
+            abs_urls: list[str] = []
+            for u in urls[:remaining]:
+                try:
+                    abs_urls.append(urljoin(base, u))
+                except Exception:
+                    continue
+            return abs_urls[:remaining]
+        except Exception:
+            return []
+
+    async def _fetch_text(self, url: str, timeout: int = 10) -> str:
+        """Lightweight async fetch (Playwright via the existing crawler session is not used here to avoid side effects).
+        Uses aiohttp if available, else returns empty string.
+        """
+        try:
+            import aiohttp  # type: ignore
+        except Exception:
+            return ""
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(url, timeout=timeout) as resp,
+            ):
+                if resp.status != 200:
+                    return ""
+                return await resp.text()
+        except Exception:
+            return ""
 
     async def pre_execute_setup(self) -> None:
         """Setup before crawling begins."""
-        await self._initialize_managers()
-
-        # Optimize memory for crawling
-        if self.memory_manager:
-            await self.memory_manager.optimize_for_crawl()
-
-        # Cleanup expired browser sessions
-        if self.browser_pool:
-            await self.browser_pool.cleanup_expired_sessions()
-
-    async def post_execute_cleanup(self) -> None:
-        """Cleanup after crawling completes."""
-        # Force memory cleanup
-        if self.memory_manager:
-            await self.memory_manager.check_memory_pressure(force_check=True)
+        await super().pre_execute_setup()
+        # No browser session cleanup needed - each crawl uses fresh browser

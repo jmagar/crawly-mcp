@@ -6,13 +6,18 @@ Replaces the massive crawler_service.py with a clean, maintainable architecture.
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from ..config import settings
-from ..models.crawl_models import CrawlRequest, CrawlResult, CrawlStatus, PageContent
-from .browser_manager import cleanup_browser_pool, get_browser_pool
-from .gpu_manager import cleanup_gpu_manager, get_gpu_manager
-from .memory_manager import cleanup_memory_manager, get_memory_manager
+from ..models.crawl_models import (
+    CrawlRequest,
+    CrawlResult,
+    CrawlStatistics,
+    CrawlStatus,
+    PageContent,
+)
+from .memory_manager import MemoryManager, cleanup_memory_manager, get_memory_manager
 from .strategies.directory_strategy import DirectoryCrawlStrategy, DirectoryRequest
 from .strategies.repository_strategy import RepositoryCrawlStrategy, RepositoryRequest
 from .strategies.web_strategy import WebCrawlStrategy
@@ -26,19 +31,16 @@ class CrawlerService:
 
     This replaces the 2189-line monolithic crawler_service.py with a clean,
     maintainable service that delegates to specialized components:
-    - BrowserManager: Session pooling and browser lifecycle
-    - GPUManager: GPU monitoring with reduced overhead
     - MemoryManager: 70% threshold with predictive cleanup
     - Strategies: Modular crawling for web, directory, repository
+    - Direct AsyncWebCrawler usage without custom browser pooling
     """
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
         # Managers (initialized lazily)
-        self._browser_pool = None
-        self._gpu_manager = None
-        self._memory_manager = None
+        self._memory_manager: MemoryManager | None = None
 
         # Strategies
         self._web_strategy = WebCrawlStrategy()
@@ -56,14 +58,12 @@ class CrawlerService:
         self.logger.info("Initializing crawler service with optimized components")
 
         # Initialize managers
-        self._browser_pool = await get_browser_pool()
-        self._gpu_manager = await get_gpu_manager()
         self._memory_manager = get_memory_manager()
 
         self.logger.info(
-            f"Crawler service initialized - Browser pool: {settings.browser_pool_size}, "
+            f"Crawler service initialized - "
             f"Memory threshold: {settings.crawl_memory_threshold}%, "
-            f"GPU monitoring: {settings.gpu_monitor_interval}s intervals"
+            f"Direct AsyncWebCrawler usage enabled"
         )
 
         self._initialized = True
@@ -92,12 +92,10 @@ class CrawlerService:
             return CrawlResult(
                 request_id=f"invalid_web_{int(time.time())}",
                 status=CrawlStatus.FAILED,
-                urls=[request.url],
+                urls=[request.url] if isinstance(request.url, str) else request.url,
                 pages=[],
                 errors=["Invalid web crawl request"],
-                statistics=request.statistics
-                if hasattr(request, "statistics")
-                else None,
+                statistics=getattr(request, "statistics", CrawlStatistics()),
             )
 
         # Execute web crawling strategy
@@ -141,7 +139,7 @@ class CrawlerService:
                 urls=[directory_path],
                 pages=[],
                 errors=["Invalid directory crawl request"],
-                statistics=None,
+                statistics=CrawlStatistics(),
             )
 
         # Execute directory crawling strategy
@@ -185,7 +183,7 @@ class CrawlerService:
                 urls=[repo_url],
                 pages=[],
                 errors=["Invalid repository crawl request"],
-                statistics=None,
+                statistics=CrawlStatistics(),
             )
 
         # Execute repository crawling strategy
@@ -201,7 +199,7 @@ class CrawlerService:
         virtual_scroll_config: dict[str, Any] | None = None,
     ) -> PageContent:
         """
-        Scrape a single page with optimized browser session reuse.
+        Scrape a single page using direct AsyncWebCrawler.
 
         Args:
             url: URL to scrape
@@ -218,10 +216,20 @@ class CrawlerService:
 
         self.logger.debug(f"Scraping single page: {url}")
 
-        try:
-            # Get optimized browser session (with caching)
-            browser = await self._browser_pool.get_session(url)
+        from crawl4ai import AsyncWebCrawler, BrowserConfig  # type: ignore
 
+        # Create minimal browser config
+        browser_config = BrowserConfig(
+            headless=settings.crawl_headless,
+            browser_type=settings.crawl_browser,
+            light_mode=True,
+            text_mode=getattr(settings, "crawl_block_images", False),
+        )
+
+        browser = AsyncWebCrawler(config=browser_config)
+        await browser.start()
+
+        try:
             # Use Crawl4AI to scrape the page
             result = await browser.arun(
                 url=url,
@@ -241,15 +249,25 @@ class CrawlerService:
                 content=result.cleaned_html or result.markdown or "",
                 html=result.html,
                 markdown=result.markdown,
-                links=list(result.links.get("internal", [])) if result.links else [],
-                images=list(result.media.get("images", [])) if result.media else [],
+                links=[
+                    link.get("href", link) if isinstance(link, dict) else link
+                    for link in result.links.get("internal", [])
+                ]
+                if result.links
+                else [],
+                images=[
+                    img.get("src", img) if isinstance(img, dict) else img
+                    for img in result.media.get("images", [])
+                ]
+                if result.media
+                else [],
                 metadata={
                     "extraction_strategy": extraction_strategy,
                     "word_count": len((result.cleaned_html or "").split()),
                     "status_code": result.status_code,
                     "response_headers": dict(result.response_headers or {}),
                 },
-                timestamp=time.time(),
+                timestamp=datetime.fromtimestamp(time.time()),
                 word_count=len((result.cleaned_html or "").split()),
             )
 
@@ -258,38 +276,24 @@ class CrawlerService:
         except Exception as e:
             self.logger.error(f"Failed to scrape {url}: {e}")
             raise
+        finally:
+            await browser.close()
 
     async def get_health_status(self) -> dict[str, Any]:
         """Get health status of all crawler components."""
         await self._ensure_initialized()
 
-        health_status = {
+        health_status: dict[str, Any] = {
             "crawler_service": "healthy",
             "components": {},
             "performance_optimizations": {
                 "memory_threshold": f"{settings.crawl_memory_threshold}%",
-                "browser_pool_size": settings.browser_pool_size,
-                "gpu_monitor_interval": f"{settings.gpu_monitor_interval}s",
+                "direct_browser_usage": True,
+                "light_mode_enabled": True,
                 "streaming_enabled": settings.crawl_enable_streaming,
                 "caching_enabled": settings.crawl_enable_caching,
             },
         }
-
-        # Browser pool health
-        if self._browser_pool:
-            pool_stats = await self._browser_pool.get_stats()
-            health_status["components"]["browser_pool"] = {
-                "status": "healthy",
-                "stats": pool_stats,
-            }
-
-        # GPU manager health
-        if self._gpu_manager:
-            gpu_stats = self._gpu_manager.get_stats()
-            health_status["components"]["gpu_manager"] = {
-                "status": "healthy" if gpu_stats.get("gpu_healthy") else "degraded",
-                "stats": gpu_stats,
-            }
 
         # Memory manager health
         if self._memory_manager:
@@ -305,24 +309,18 @@ class CrawlerService:
         """Cleanup all crawler resources."""
         self.logger.info("Cleaning up crawler service")
 
-        # Cleanup in reverse initialization order
-        if self._browser_pool:
-            await cleanup_browser_pool()
-
-        if self._gpu_manager:
-            await cleanup_gpu_manager()
-
+        # Cleanup memory manager
         if self._memory_manager:
             cleanup_memory_manager()
 
         self._initialized = False
         self.logger.info("Crawler service cleanup completed")
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "CrawlerService":
         """Async context manager entry."""
         await self._ensure_initialized()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.cleanup()

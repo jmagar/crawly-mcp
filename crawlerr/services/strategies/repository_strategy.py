@@ -18,7 +18,6 @@ from ...models.crawl_models import (
     CrawlStatistics,
     CrawlStatus,
 )
-from ..memory_manager import get_memory_manager
 from .base_strategy import BaseCrawlStrategy
 from .directory_strategy import DirectoryCrawlStrategy, DirectoryRequest
 
@@ -60,13 +59,7 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
 
     def __init__(self) -> None:
         super().__init__()
-        self.memory_manager = None
         self.directory_strategy = DirectoryCrawlStrategy()
-
-    async def _initialize_managers(self) -> None:
-        """Initialize required managers."""
-        if not self.memory_manager:
-            self.memory_manager = get_memory_manager()
 
     async def validate_request(self, request: RepositoryRequest) -> bool:
         """Validate repository crawl request."""
@@ -109,7 +102,7 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
         """Execute repository crawling with cloning and processing."""
         await self._initialize_managers()
 
-        time.time()
+        # start_time = time.time()  # Not used currently
         self.logger.info(f"Starting repository crawl: {request.repo_url}")
 
         await self.pre_execute_setup()
@@ -247,8 +240,8 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
             self.logger.info(f"Successfully cloned repository to {target_dir}")
             return target_dir
 
-        except TimeoutError:
-            raise Exception("Repository cloning timed out (5 minutes)")
+        except TimeoutError as e:
+            raise Exception("Repository cloning timed out (5 minutes)") from e
         except Exception as e:
             self.logger.error(f"Failed to clone repository {request.repo_url}: {e}")
             return None
@@ -280,11 +273,11 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
                     page.metadata["repository_info"] = repo_info
                     page.metadata["repository_url"] = request.repo_url
 
-            # Add repository info to result metadata
-            if hasattr(result, "metadata"):
-                result.metadata["repository_info"] = repo_info
-            else:
-                result.metadata = {"repository_info": repo_info}
+            # Add repository info to result warnings for now
+            # (CrawlResult doesn't have metadata field)
+            result.warnings.append(
+                f"Repository info: {repo_info['name']} - {repo_info['file_count']} files"
+            )
 
             return result
 
@@ -309,7 +302,7 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
             total_size = 0
             file_count = 0
             dir_count = 0
-            language_stats = {}
+            language_stats: dict[str, int] = {}
             large_files = []
 
             for root, dirs, files in os.walk(repo_dir):
@@ -341,7 +334,9 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
                         continue
 
             # Sort and limit large files
-            large_files.sort(key=lambda x: x["size_kb"], reverse=True)
+            large_files.sort(
+                key=lambda x: float(str(x.get("size_kb", 0))), reverse=True
+            )
             large_files = large_files[:10]  # Top 10 largest files
 
             info.update(
@@ -382,17 +377,3 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
             self.logger.warning(f"Error gathering repository info: {e}")
 
         return info
-
-    async def pre_execute_setup(self) -> None:
-        """Setup before repository processing begins."""
-        await self._initialize_managers()
-
-        # Optimize memory for processing
-        if self.memory_manager:
-            await self.memory_manager.optimize_for_crawl()
-
-    async def post_execute_cleanup(self) -> None:
-        """Cleanup after repository processing completes."""
-        # Force memory cleanup
-        if self.memory_manager:
-            await self.memory_manager.check_memory_pressure(force_check=True)

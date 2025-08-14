@@ -11,6 +11,16 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+# Reusable validator function
+def calculate_word_count_validator(v: int, info: Any) -> int:
+    """Pydantic validator to calculate word count from content."""
+    if v == 0 and info.data and "content" in info.data:
+        content = info.data["content"]
+        if content:
+            return len(content.split())
+    return v
+
+
 class CrawlStatus(str, Enum):
     """Status of a crawl operation."""
 
@@ -37,14 +47,9 @@ class PageContent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    @field_validator("word_count", mode="before")
-    @classmethod
-    def calculate_word_count(cls, v: int, info: Any) -> int:
-        if v == 0 and info.data and "content" in info.data:
-            content = info.data["content"]
-            if content:
-                return len(content.split())
-        return v
+    _validate_word_count = field_validator("word_count", mode="before")(
+        calculate_word_count_validator
+    )
 
 
 class CrawlRequest(BaseModel):
@@ -63,6 +68,8 @@ class CrawlRequest(BaseModel):
     extract_media: bool = False
     include_raw_html: bool = False
     session_id: str | None = None
+    chunking_strategy: str | None = None
+    chunking_options: dict[str, Any] | None = None
 
     @field_validator("url")
     @classmethod

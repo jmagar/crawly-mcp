@@ -93,6 +93,22 @@ class RagService:
         self.embedding_service = EmbeddingService()
         self.vector_service = VectorService()
 
+        # Add missing attributes from settings
+        self.chunk_size = settings.chunk_size
+        self.chunk_overlap = settings.chunk_overlap
+        self.tokenizer = None
+        self.tokenizer_type = "tiktoken"  # Default tokenizer type
+
+        # Initialize tokenizer
+        try:
+            import tiktoken
+
+            self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+            self.tokenizer_type = "tiktoken"
+        except ImportError:
+            logger.warning("tiktoken not available, using character-based chunking")
+            self.tokenizer_type = "character"
+
         # Initialize Qwen3 reranker with GPU optimization
         self.reranker = None
         self.reranker_type = "none"

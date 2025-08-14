@@ -347,12 +347,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Chunking strategy (best-effort; only if available)
         if getattr(request, "chunking_strategy", None):
             try:
-                from crawl4ai.chunking_strategy import (
+                from crawl4ai.chunking_strategy import (  # type: ignore[import-untyped]
                     FixedLengthWordChunking,
                     OverlappingWindowChunking,
                     RegexChunking,
                     SlidingWindowChunking,
-                )  # type: ignore
+                )
 
                 chunking_map = {
                     "overlapping_window": OverlappingWindowChunking,
@@ -360,7 +360,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     "fixed_length_word": FixedLengthWordChunking,
                     "regex": RegexChunking,
                 }
-                chunker_class = chunking_map.get(request.chunking_strategy)
+                chunker_class = chunking_map.get(request.chunking_strategy or "")
                 if chunker_class:
                     chunking_options = request.chunking_options or {}
                     run_config.chunking_strategy = chunker_class(**chunking_options)  # type: ignore[attr-defined]
@@ -371,7 +371,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def _build_deep_crawl_strategy(
         self, request: CrawlRequest, sitemap_seeds: list[str]
-    ):
+    ) -> BFSDeepCrawlStrategy | None:
         """Construct a Best-First deep crawl strategy with filters and scoring; fallback to BFS."""
         max_depth = request.max_depth or 1
         max_pages = request.max_pages or 100
@@ -592,9 +592,10 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             return ""
 
         try:
+            timeout_obj = aiohttp.ClientTimeout(total=timeout)
             async with (
                 aiohttp.ClientSession() as session,
-                session.get(url, timeout=timeout) as resp,
+                session.get(url, timeout=timeout_obj) as resp,
             ):
                 if resp.status != 200:
                     return ""

@@ -65,10 +65,10 @@ pip install -r requirements.txt
 ### 4. Run the Server
 ```bash
 # Development mode with hot reload
-fastmcp dev crawlerr/server.py
+fastmcp dev crawler_mcp/server.py
 
 # Or run directly
-uv run python crawlerr/server.py
+uv run python -m crawler_mcp.server
 ```
 
 The server will be available at `http://localhost:8000` with MCP over HTTP transport.
@@ -201,7 +201,7 @@ graph TB
 ```bash
 # Vector Database
 QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=crawly_documents
+QDRANT_COLLECTION=crawlerr_documents
 
 # Text Embeddings Inference
 TEI_URL=http://localhost:8080
@@ -260,11 +260,11 @@ text-embeddings-inference:
 ### Project Structure
 ```
 crawly-mcp/
-├── crawlerr/                 # Main application package
+├── crawler_mcp/              # Main application package
 │   ├── server.py            # FastMCP server entry point
 │   ├── config.py            # Pydantic settings management
 │   ├── models/              # Pydantic data models
-│   ├── services/            # Core business logic
+│   ├── core/                # Core services (embeddings, vectors, rag, sources)
 │   ├── tools/               # MCP tool implementations
 │   ├── middleware/          # FastMCP middleware
 │   └── resources/           # MCP resources
@@ -276,16 +276,16 @@ crawly-mcp/
 ### Development Commands
 ```bash
 # Start development server with hot reload
-fastmcp dev crawlerr/server.py
+fastmcp dev crawler_mcp/server.py
 
 # Run tests
 uv run pytest
 
 # Install for Claude Desktop
-fastmcp install claude-desktop crawlerr/server.py
+fastmcp install claude-desktop crawler_mcp/server.py
 
 # Install for Claude Code
-fastmcp install claude-code crawlerr/server.py
+fastmcp install claude-code crawler_mcp/server.py
 ```
 
 ## 🐳 Docker Deployment
@@ -336,7 +336,7 @@ The included `docker-compose.yml` provides production-ready services:
   "mcpServers": {
     "crawly": {
       "command": "uv",
-      "args": ["run", "python", "crawlerr/server.py"],
+      "args": ["run", "python", "-m", "crawler_mcp.server"],
       "cwd": "/path/to/crawly-mcp"
     }
   }
@@ -346,7 +346,7 @@ The included `docker-compose.yml` provides production-ready services:
 ### Claude Code CLI
 ```bash
 # Install and configure
-fastmcp install claude-code crawlerr/server.py
+fastmcp install claude-code crawler_mcp/server.py
 ```
 
 ## 📄 License

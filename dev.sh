@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Crawlerr Development Server Manager
+# Crawler MCP Development Server Manager
 # Safely manages MCP server and Docker services for development
 
 set -e  # Exit on any error
@@ -13,14 +13,23 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MCP_SERVER_NAME="crawlerr-mcp-server"
-PIDFILE="./logs/.crawlerr-dev.pid"
-LOGFILE="./logs/dev-server.log"
+MCP_SERVER_NAME="crawler-mcp-server"
+PIDFILE="./logs/.crawler-mcp-dev.pid"
+LOGFILE="./logs/crawler-mcp-dev.log"
+
+# Read SERVER_PORT from .env without sourcing (avoids syntax errors)
+PORT=""
+if [ -f .env ]; then
+    # Extract numeric port from the last occurrence of SERVER_PORT= (ignore quotes/comments)
+    PORT=$(grep -Po '^[[:space:]]*SERVER_PORT[[:space:]]*=[[:space:]]*\K[0-9]+' .env | tail -n1)
+fi
+# Default if not set or empty
+[ -z "$PORT" ] && PORT=8000
 
 # Ensure logs directory exists
 mkdir -p logs
 
-echo -e "${BLUE}🚀 Crawlerr Development Server Manager${NC}"
+echo -e "${BLUE}🚀 Crawler MCP Development Server Manager${NC}"
 echo "=================================================="
 
 # Function to print colored output with consistent timestamp format
@@ -50,7 +59,7 @@ check_mcp_server() {
         local pid=$(cat "$PIDFILE")
         if ps -p "$pid" > /dev/null 2>&1; then
             # Check if it's actually our server process
-            if ps -p "$pid" -o command= | grep -q "crawlerr"; then
+            if ps -p "$pid" -o command= | grep -q "crawler_mcp"; then
                 return 0  # Server is running
             else
                 # PID file exists but process is not our server, clean it up
@@ -70,7 +79,7 @@ check_mcp_server() {
 stop_mcp_server() {
     if check_mcp_server; then
         local pid=$(cat "$PIDFILE")
-        log_info "Stopping existing Crawlerr MCP server (PID: $pid)..."
+        log_info "Stopping existing Crawler MCP server (PID: $pid)..."
 
         # Send SIGTERM first (graceful shutdown)
         if kill "$pid" 2>/dev/null; then
@@ -92,7 +101,7 @@ stop_mcp_server() {
         rm -f "$PIDFILE"
         log_success "Previous server stopped"
     else
-        log_info "No existing Crawlerr MCP server found"
+        log_info "No existing Crawler MCP server found"
     fi
 }
 
@@ -165,7 +174,7 @@ check_docker_services() {
 
 # Function to start the MCP server
 start_mcp_server() {
-    log_info "Starting Crawlerr MCP server..."
+    log_info "Starting Crawler MCP server..."
 
     # Check if virtual environment exists
     if [ ! -d ".venv" ]; then
@@ -174,13 +183,13 @@ start_mcp_server() {
     fi
 
     # Check if server file exists
-    if [ ! -f "crawlerr/server.py" ]; then
-        log_error "Server file 'crawlerr/server.py' not found"
+    if [ ! -f "crawler_mcp/server.py" ]; then
+        log_error "Server file 'crawler_mcp/server.py' not found"
         exit 1
     fi
 
     # Start the server in background and capture PID
-    log_info "Starting Crawlerr MCP server directly..."
+    log_info "Starting Crawler MCP server directly..."
 
     # Set signal trap early to protect the background process
     trap 'echo -e "\n${YELLOW}⚠️  Log streaming stopped. Server continues running in background.${NC}"; echo -e "${BLUE}ℹ️  Use '"'"'./dev.sh stop'"'"' to stop the server${NC}"; exit 0' SIGINT
@@ -189,7 +198,7 @@ start_mcp_server() {
     # Use setsid to create a new session and detach from terminal
     # Unset conflicting VIRTUAL_ENV to prevent uv warnings
     unset VIRTUAL_ENV
-    setsid nohup uv run python -m crawlerr.server \
+    setsid nohup uv run python -m crawler_mcp.server \
         > "$LOGFILE" 2>&1 &
 
     local server_pid=$!
@@ -198,15 +207,15 @@ start_mcp_server() {
     echo "$server_pid" > "$PIDFILE"
 
     # Wait for port to become available (server to start)
-    log_info "Waiting for port 8010 to become available..."
+    log_info "Waiting for port ${PORT} to become available..."
     local port_attempts=0
-    while ! lsof -Pi :8010 -sTCP:LISTEN -t >/dev/null 2>&1 && [ $port_attempts -lt 20 ]; do
+    while ! lsof -Pi :"${PORT}" -sTCP:LISTEN -t >/dev/null 2>&1 && [ $port_attempts -lt 20 ]; do
         sleep 0.5
         port_attempts=$((port_attempts + 1))
     done
 
     if [ $port_attempts -eq 20 ]; then
-        log_error "Port 8010 did not become available after 10 seconds"
+        log_error "Port ${PORT} did not become available after 10 seconds"
         exit 1
     fi
 

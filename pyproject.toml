@@ -65,7 +65,7 @@ test = [
 ]
 
 [project.scripts]
-crawlerr = "crawlerr.server:main"
+crawler-mcp = "crawler_mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

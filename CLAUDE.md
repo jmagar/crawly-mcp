@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) for developing this 
 ### Recommended Project Structure
 Follow this structure for a clean and maintainable server.
 ```
-crawlerr/
+crawler_mcp/
 ├── .claude/                  # Claude Code specific files (optional)
 │   └── templates/            # Reusable templates for the agent
 ├── .env.example              # Example environment variables (for local config)
@@ -21,10 +21,10 @@ crawlerr/
 ├── CLAUDE.md                 # This file
 ├── IMPLEMENTATION_PLAN.md    # Detailed implementation specifications
 ├── docker-compose.yml        # Qdrant and HF TEI services
-├── crawlerr/                 # Main application package
+├── crawler_mcp/              # Main application package
 │   ├── __init__.py
-│   ├── config.py           # Pydantic settings management (to be created)
-│   ├── server.py           # Main server entry point (to be created)
+│   ├── config.py           # Pydantic settings management
+│   ├── server.py           # Main server entry point
 │   ├── prompts/            # Reusable crawling and analysis prompt templates
 │   │   └── __init__.py
 │   ├── resources/          # MCP resources to expose crawled data
@@ -33,7 +33,7 @@ crawlerr/
 │   │   └── __init__.py
 │   ├── models/             # Pydantic data models
 │   │   └── __init__.py
-│   ├── services/           # Core business logic (web crawling, RAG operations, etc.)
+│   ├── core/               # Core services (embeddings, vectors, rag, sources)
 │   │   └── __init__.py
 │   └── tools/              # MCP tool implementations (scrape, crawl, rag_query, etc.)
 │       └── __init__.py
@@ -58,19 +58,19 @@ Use the built-in `fastmcp` command-line interface for an efficient development c
 #### Interactive Debugging (`fastmcp dev`)
 For interactive testing and debugging, use the `dev` command. This runs your server with the MCP Inspector UI, which allows you to call tools and inspect responses.
 
-- **Start the dev server**: `fastmcp dev crawlerr/server.py --with crawl4ai --with qdrant-client --with torch`
+- **Start the dev server**: `fastmcp dev crawler_mcp/server.py --with crawl4ai --with qdrant-client --with torch`
 
 #### Running the Server (`fastmcp run`)
 To run the server directly (e.g., for integration testing or production), use the `run` command.
 
-- **Run with HTTP transport**: `fastmcp run crawlerr/server.py --transport http`
-- **Run with dependencies**: `fastmcp run crawlerr/server.py --with crawl4ai --with qdrant-client`
+- **Run with HTTP transport**: `fastmcp run crawler_mcp/server.py --transport http`
+- **Run with dependencies**: `fastmcp run crawler_mcp/server.py --with crawl4ai --with qdrant-client`
 
 ## Installation & Deployment
 Once your server is ready, use the `fastmcp install` command to make it available to MCP clients.
 
-- **For supported clients**: Use `fastmcp install <client_name> crawlerr/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
-- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawlerr/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
+- **For supported clients**: Use `fastmcp install <client_name> crawler_mcp/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
+- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawler_mcp/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
 
 ## FastMCP Specific Patterns
 

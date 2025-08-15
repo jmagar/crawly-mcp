@@ -94,7 +94,7 @@ class CrawlerrSettings(BaseSettings):
     max_concurrent_crawls: int = Field(default=25, alias="MAX_CONCURRENT_CRAWLS")
     crawler_delay: float = Field(default=0.1, alias="CRAWLER_DELAY")
     crawler_timeout: float = Field(default=30.0, alias="CRAWLER_TIMEOUT")
-    crawl_min_words: int = Field(default=100, alias="CRAWL_MIN_WORDS")
+    crawl_min_words: int = Field(default=50, alias="CRAWL_MIN_WORDS")
     crawl_remove_overlays: bool = Field(default=True, alias="CRAWL_REMOVE_OVERLAYS")
     crawl_extract_media: bool = Field(default=False, alias="CRAWL_EXTRACT_MEDIA")
     crawl_knowledge_graph: bool = Field(default=False, alias="CRAWL_KNOWLEDGE_GRAPH")
@@ -156,6 +156,28 @@ class CrawlerrSettings(BaseSettings):
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
     )
 
+    # Deduplication Configuration
+    deduplication_enabled: bool = Field(
+        default=True,
+        alias="DEDUPLICATION_ENABLED",
+        description="Enable content-based deduplication for crawled pages",
+    )
+    deduplication_strategy: str = Field(
+        default="content_hash",
+        alias="DEDUPLICATION_STRATEGY",
+        description="Deduplication strategy: 'content_hash', 'timestamp', or 'none'",
+    )
+    delete_orphaned_chunks: bool = Field(
+        default=True,
+        alias="DELETE_ORPHANED_CHUNKS",
+        description="Delete chunks that no longer exist in re-crawled content",
+    )
+    preserve_unchanged_metadata: bool = Field(
+        default=True,
+        alias="PRESERVE_UNCHANGED_METADATA",
+        description="Preserve metadata for unchanged chunks during re-crawls",
+    )
+
     # CORS & Security
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
     cors_credentials: bool = Field(default=True, alias="CORS_CREDENTIALS")
@@ -192,6 +214,27 @@ class CrawlerrSettings(BaseSettings):
             raise ValueError("CHUNK_OVERLAP must be less than CHUNK_SIZE")
         if self.chunk_size > self.embedding_max_length:
             raise ValueError("CHUNK_SIZE must be <= EMBEDDING_MAX_LENGTH")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_deduplication(self) -> "CrawlerrSettings":
+        """Validate deduplication configuration."""
+        valid_strategies = {"content_hash", "timestamp", "none"}
+        if self.deduplication_strategy not in valid_strategies:
+            raise ValueError(
+                f"DEDUPLICATION_STRATEGY must be one of: {', '.join(valid_strategies)}"
+            )
+
+        # Warn if deduplication is disabled but orphan deletion is enabled
+        if not self.deduplication_enabled and self.delete_orphaned_chunks:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "DELETE_ORPHANED_CHUNKS is enabled but DEDUPLICATION_ENABLED is False. "
+                "Orphan detection requires deduplication to be enabled."
+            )
+
         return self
 
     model_config = SettingsConfigDict(

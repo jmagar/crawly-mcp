@@ -1,5 +1,5 @@
 """
-Crawlerr FastMCP Server - RAG-enabled web crawling with Crawl4AI and Qdrant.
+Crawler MCP FastMCP Server - RAG-enabled web crawling with Crawl4AI and Qdrant.
 
 This server provides comprehensive web crawling capabilities with automatic RAG indexing
 using Crawl4AI 0.7.0, Qdrant vector database, and HF Text Embeddings Inference.
@@ -294,8 +294,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
         "available_tools": [
             "scrape - Single page web scraping",
             "crawl - Multi-page website crawling",
-            "crawl_repo - Git repository analysis",
-            "crawl_dir - Local directory processing",
+            "crawl - Unified smart crawling (auto-detects websites, repositories, directories)",
             "rag_query - Semantic search queries",
             "list_sources - Source management",
             "health_check - System health monitoring",

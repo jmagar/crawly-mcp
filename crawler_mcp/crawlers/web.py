@@ -272,6 +272,31 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
             await self.post_execute_cleanup()
 
+    def _extract_text_from_html(self, html: str | None) -> str:
+        """Extract plain text from HTML as a final fallback."""
+        if not html:
+            return ""
+
+        try:
+            # Simple HTML tag removal (basic fallback)
+            import re
+
+            # Remove script and style tags and their content
+            html = re.sub(
+                r"<(script|style)[^>]*>.*?</\1>",
+                "",
+                html,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+            # Remove all other HTML tags
+            text = re.sub(r"<[^>]+>", "", html)
+            # Clean up whitespace
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+        except Exception as e:
+            self.logger.warning(f"Failed to extract text from HTML: {e}")
+            return ""
+
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
         # Prioritize fit markdown for clean, filtered content
@@ -280,19 +305,36 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             if hasattr(result, "markdown")
             else None
         )
+        # Try multiple content extraction methods with better fallbacks
         best_content = (
             result.extracted_content
             or fit_markdown
             or result.markdown
             or result.cleaned_html
+            or self._extract_text_from_html(result.html)  # Final fallback
             or ""
         )
+
+        # Calculate word count explicitly
+        word_count = len(best_content.split()) if best_content.strip() else 0
+
+        # Log content extraction for debugging
+        self.logger.debug(
+            f"Content extraction for {result.url}: "
+            f"extracted_content={'present' if result.extracted_content else 'empty'}, "
+            f"fit_markdown={'present' if fit_markdown else 'empty'}, "
+            f"markdown={'present' if result.markdown else 'empty'}, "
+            f"cleaned_html={'present' if result.cleaned_html else 'empty'}, "
+            f"final_word_count={word_count}"
+        )
+
         return PageContent(
             url=result.url,
             title=result.metadata.get("title", ""),
             content=best_content,
             html=result.html,
             markdown=fit_markdown or result.markdown,
+            word_count=word_count,  # Explicitly set word count
             links=[
                 link.get("href", link) if isinstance(link, dict) else link
                 for link in result.links.get("internal", [])
@@ -307,7 +349,6 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else [],
             metadata={
                 "depth": result.metadata.get("depth", 0),
-                "word_count": len(best_content.split()),
                 "status_code": result.status_code,
                 "response_headers": dict(result.response_headers or {}),
                 "chunk_metadata": getattr(result, "chunk_metadata", {}),
@@ -340,9 +381,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
         # Create content filter for fit markdown generation
         content_filter = PruningContentFilter(
-            threshold=0.45,  # Prune nodes below 45% relevance score
+            threshold=0.2,  # Prune nodes below 20% relevance score (less aggressive)
             threshold_type="dynamic",  # Dynamic scoring
-            min_word_threshold=5,  # Ignore very short text blocks
+            min_word_threshold=2,  # Allow shorter text blocks
         )
 
         # Create markdown generator with content filter

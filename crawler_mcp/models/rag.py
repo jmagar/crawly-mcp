@@ -28,6 +28,14 @@ class DocumentChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
+    # Deduplication fields
+    content_hash: str | None = None  # SHA256 hash of content for change detection
+    previous_hash: str | None = None  # Previous content hash if content changed
+    first_seen: datetime = Field(default_factory=datetime.utcnow)  # When first crawled
+    last_modified: datetime = Field(
+        default_factory=datetime.utcnow
+    )  # When content last changed
+
     _validate_word_count = field_validator("word_count", mode="before")(
         calculate_word_count_validator
     )

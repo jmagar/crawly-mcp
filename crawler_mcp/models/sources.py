@@ -63,6 +63,21 @@ class SourceInfo(BaseModel):
     last_crawled: datetime | None = None
     crawl_frequency: str | None = None  # daily, weekly, monthly, never
 
+    # Deduplication fields
+    content_hash: str | None = None  # Overall source content hash
+    chunk_hashes: dict[str, str] = Field(
+        default_factory=dict
+    )  # Map of chunk_id → content_hash
+    last_crawl_status: str | None = None  # "unchanged", "modified", "new", "error"
+
+    # Incremental update tracking
+    etag: str | None = None  # HTTP ETag header from last crawl
+    last_modified_header: datetime | None = None  # HTTP Last-Modified header
+    cache_control: str | None = None  # HTTP Cache-Control header
+    should_revalidate: bool = (
+        True  # Whether content should be revalidated on next crawl
+    )
+
     @property
     def is_stale(self) -> bool:
         """Check if source needs re-crawling based on frequency."""
@@ -87,6 +102,51 @@ class SourceInfo(BaseModel):
         if self.chunk_count == 0:
             return 0.0
         return self.total_content_length / self.chunk_count
+
+    def should_skip_crawl(
+        self,
+        response_etag: str | None = None,
+        response_last_modified: datetime | None = None,
+    ) -> bool:
+        """
+        Check if crawling should be skipped based on HTTP caching headers.
+
+        Args:
+            response_etag: ETag from current HTTP response
+            response_last_modified: Last-Modified from current HTTP response
+
+        Returns:
+            True if content likely hasn't changed and crawl can be skipped
+        """
+        # If we don't have caching info, always crawl
+        if not self.etag and not self.last_modified_header:
+            return False
+
+        # If response doesn't provide caching headers, always crawl
+        if not response_etag and not response_last_modified:
+            return False
+
+        # Check ETag match (most reliable)
+        if self.etag and response_etag:
+            return self.etag == response_etag
+
+        # Check Last-Modified (less reliable but useful)
+        if self.last_modified_header and response_last_modified:
+            return self.last_modified_header >= response_last_modified
+
+        return False
+
+    def update_cache_headers(
+        self,
+        etag: str | None = None,
+        last_modified: datetime | None = None,
+        cache_control: str | None = None,
+    ) -> None:
+        """Update HTTP caching headers from crawl response."""
+        self.etag = etag
+        self.last_modified_header = last_modified
+        self.cache_control = cache_control
+        self.should_revalidate = True  # Reset revalidation flag
 
 
 class SourceFilter(BaseModel):

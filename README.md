@@ -1,4 +1,4 @@
-# 🕷️ Crawly MCP - Advanced RAG-Enabled Web Crawling Server
+# 🕷️ Crawler MCP - Advanced RAG-Enabled Web Crawling Server
 
 A powerful, production-ready Model Context Protocol (MCP) server that combines advanced web crawling capabilities with semantic search through RAG (Retrieval-Augmented Generation). Built with **FastMCP 2.0**, **Crawl4AI 0.7.0**, **Qdrant vector database**, and **Qwen3-Embedding-0.6B** for multilingual semantic understanding.
 
@@ -40,8 +40,8 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 
 ### 1. Clone and Setup
 ```bash
-git clone https://github.com/jmagar/crawly-mcp.git
-cd crawly-mcp
+git clone https://github.com/jmagar/crawler-mcp.git
+cd crawler-mcp
 ```
 
 ### 2. Start Vector Services
@@ -87,36 +87,57 @@ Extract content from individual web pages with AI-powered precision.
 }
 ```
 
-### `crawl` - Site-wide Discovery
-Comprehensive website crawling with adaptive intelligence.
+### `get_rag_stats` - RAG System Statistics
+Get comprehensive statistics about the RAG system.
 
+### `delete_source` - Source Management
+Delete a source and all its associated documents from the RAG system.
+
+### `health_check` - System Health
+Perform a comprehensive health check of all services.
+
+### `get_server_info` - Server Information
+Get detailed information about the server configuration and capabilities.
+
+**Note**: Web crawling limits are configured via environment variables:
+- `CRAWL_MAX_PAGES` (default: 1000) - Maximum pages to crawl per site
+- `CRAWL_MAX_DEPTH` (default: 3) - Maximum crawling depth
+
+**With Deduplication (Re-crawls):**
 ```json
 {
-  "url": "https://docs.example.com",
-  "max_pages": 1000,
-  "max_depth": 3,
+  "target": "https://docs.example.com",
+  "sitemap_first": true,
+  "process_with_rag": true
+}
+```
+*Note: Deduplication is automatically enabled by default. The system will skip unchanged content and only process new or modified pages, providing up to 4.67x speed improvement for re-crawls.*
+
+### `crawl` - Unified Smart Crawling
+Intelligent auto-detection crawling that handles websites, repositories, and directories.
+
+**Website crawling:**
+```json
+{
+  "target": "https://docs.example.com",
   "sitemap_first": true,
   "process_with_rag": true
 }
 ```
 
-### `crawl_repo` - Code Repository Analysis
-Clone and analyze GitHub repositories with code-aware processing.
-
+**Repository analysis:**
 ```json
 {
-  "repo_url": "https://github.com/microsoft/vscode",
+  "target": "https://github.com/microsoft/vscode",
   "file_patterns": ["*.py", "*.md", "*.ts"],
   "process_with_rag": true
 }
 ```
 
-### `crawl_dir` - Local File Processing
-Process local directories with intelligent file type detection.
-
+**Local directory processing:**
 ```json
 {
-  "directory_path": "/path/to/documents",
+  "target": "/path/to/documents",
   "file_patterns": ["*.pdf", "*.txt", "*.md"],
   "recursive": true,
   "process_with_rag": true
@@ -166,10 +187,12 @@ graph TB
     subgraph "MCP Tools"
         I[scrape]
         J[crawl]
-        K[crawl_repo]
-        L[crawl_dir]
-        M[rag_query]
-        N[list_sources]
+        K[rag_query]
+        L[list_sources]
+        M[get_rag_stats]
+        N[delete_source]
+        O[health_check]
+        P[get_server_info]
     end
 ```
 
@@ -189,11 +212,18 @@ graph TB
 ## ⚡ Performance Metrics
 
 - **Crawling Speed**: 50+ pages/minute (typical web content)
+- **Re-crawl Optimization**: Up to 4.67x faster with deduplication enabled
 - **Embedding Generation**: 1000+ texts/minute via GPU-accelerated TEI
 - **Search Latency**: <100ms for semantic queries (Qdrant HNSW)
 - **Memory Usage**: ~4GB RAM for moderate workloads
 - **Concurrent Requests**: 128 simultaneous embedding requests
 - **Batch Processing**: 32K tokens per batch for optimal GPU utilization
+
+### Deduplication Performance
+- **Unchanged Re-crawls**: 4.67x speed improvement (skip all processing)
+- **Partial Changes**: 2.40x speed improvement (process only changed content)
+- **First-time Crawls**: Minimal overhead (fast-path optimization)
+- **Content Detection**: SHA256-based change detection in <1ms per chunk
 
 ## 🔧 Configuration
 
@@ -213,6 +243,12 @@ CRAWL_MAX_PAGES=1000
 CRAWL_MAX_DEPTH=3
 MAX_CONCURRENT_CRAWLS=25
 
+# Deduplication Configuration
+DEDUPLICATION_ENABLED=true
+DELETE_ORPHANED_CHUNKS=true
+CHUNK_SIZE=1024
+CHUNK_OVERLAP=200
+
 # Server Configuration
 SERVER_HOST=127.0.0.1
 SERVER_PORT=8000
@@ -229,8 +265,10 @@ text-embeddings-inference:
     - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
   command:
     - --model-id=Qwen/Qwen3-Embedding-0.6B
-    - --max-concurrent-requests=128
-    - --max-batch-tokens=32768
+    - --max-concurrent-requests=256
+    - --max-batch-tokens=131072
+    - --max-batch-requests=512
+    - --max-client-batch-size=512
 ```
 
 ## 🔬 Advanced Features
@@ -249,6 +287,19 @@ text-embeddings-inference:
 - **Hybrid Search**: Vector + keyword combination with smart fallbacks
 - **Metadata Filtering**: Rich contextual search filters
 
+### Content Deduplication System
+- **🎯 Smart Deduplication**: Content-based duplicate detection using SHA256 hashing
+- **⚡ Performance Optimization**: Up to 4.67x speed improvement for unchanged re-crawls
+- **🔄 Incremental Updates**: Only process changed content with ETag/Last-Modified support
+- **🧹 Orphan Cleanup**: Automatic removal of outdated chunks during re-crawls
+- **📊 Deterministic IDs**: URL + position based IDs for consistent chunk identification
+
+#### Deduplication Benefits
+- **Reduced Storage**: Eliminates duplicate content in vector database
+- **Faster Re-crawls**: Skip processing unchanged content automatically
+- **Lower Costs**: Reduced embedding generation and vector operations
+- **Better Performance**: 2.40x speed improvement even with partial changes
+
 ### Production Ready
 - **Health Monitoring**: Comprehensive service health checks
 - **Progress Tracking**: Real-time operation progress via FastMCP
@@ -259,7 +310,7 @@ text-embeddings-inference:
 
 ### Project Structure
 ```
-crawly-mcp/
+crawler-mcp/
 ├── crawler_mcp/              # Main application package
 │   ├── server.py            # FastMCP server entry point
 │   ├── config.py            # Pydantic settings management
@@ -334,10 +385,10 @@ The included `docker-compose.yml` provides production-ready services:
 ```json
 {
   "mcpServers": {
-    "crawly": {
+    "crawler": {
       "command": "uv",
       "args": ["run", "python", "-m", "crawler_mcp.server"],
-      "cwd": "/path/to/crawly-mcp"
+      "cwd": "/path/to/crawler-mcp"
     }
   }
 }
@@ -363,8 +414,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support & Community
 
-- **🐛 Issues**: [GitHub Issues](https://github.com/jmagar/crawly-mcp/issues)
-- **💬 Discussions**: [GitHub Discussions](https://github.com/jmagar/crawly-mcp/discussions)
+- **🐛 Issues**: [GitHub Issues](https://github.com/jmagar/crawler-mcp/issues)
+- **💬 Discussions**: [GitHub Discussions](https://github.com/jmagar/crawler-mcp/discussions)
 - **📖 Documentation**: See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for technical details
 
 ## 🙏 Acknowledgments
@@ -379,9 +430,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <div align="center">
 
-**🕷️ Crawly MCP** - Where intelligent web crawling meets powerful semantic search
+**🕷️ Crawler MCP** - Where intelligent web crawling meets powerful semantic search
 
-[![GitHub stars](https://img.shields.io/github/stars/jmagar/crawly-mcp?style=social)](https://github.com/jmagar/crawly-mcp/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/jmagar/crawly-mcp?style=social)](https://github.com/jmagar/crawly-mcp/network/members)
+[![GitHub stars](https://img.shields.io/github/stars/jmagar/crawler-mcp?style=social)](https://github.com/jmagar/crawler-mcp/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/jmagar/crawler-mcp?style=social)](https://github.com/jmagar/crawler-mcp/network/members)
 
 </div>

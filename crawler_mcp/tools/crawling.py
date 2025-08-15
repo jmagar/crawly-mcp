@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
+from ..config import settings
 from ..core import CrawlerService, RagService, SourceService
 from ..middleware.progress import progress_middleware
 from ..models.crawl import CrawlRequest, CrawlResult, CrawlStatus
@@ -58,6 +59,8 @@ async def _process_rag_if_requested(
     crawl_result: CrawlResult,
     source_type: SourceType,
     process_with_rag: bool,
+    deduplication: bool | None = None,
+    force_update: bool = False,
 ) -> dict[str, Any]:
     """
     Shared RAG processing logic for all crawl types.
@@ -67,6 +70,8 @@ async def _process_rag_if_requested(
         crawl_result: Result from crawling operation
         source_type: Type of source for registration
         process_with_rag: Whether to process with RAG
+        deduplication: Enable deduplication (defaults to settings)
+        force_update: Force update all chunks even if unchanged
 
     Returns:
         Dictionary with RAG processing results or error info
@@ -77,9 +82,13 @@ async def _process_rag_if_requested(
         await ctx.info(f"Processing {len(crawl_result.pages)} items for RAG indexing")
 
         try:
-            # Process for RAG
+            # Process for RAG with deduplication support
             async with RagService() as rag_service:
-                rag_stats = await rag_service.process_crawl_result(crawl_result)
+                rag_stats = await rag_service.process_crawl_result(
+                    crawl_result,
+                    deduplication=deduplication,
+                    force_update=force_update,
+                )
                 rag_info["rag_processing"] = rag_stats
 
             # Register sources
@@ -239,6 +248,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         process_with_rag: bool = True,
         enable_virtual_scroll: bool | None = None,
         virtual_scroll_count: int | None = None,
+        deduplication: bool | None = None,
+        force_update: bool = False,
     ) -> dict[str, Any]:
         """
         Scrape a single web page using Crawl4AI with advanced features.
@@ -251,6 +262,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             process_with_rag: Whether to process content for RAG indexing
             enable_virtual_scroll: Enable virtual scroll for dynamic content (auto-detect if None)
             virtual_scroll_count: Number of scroll actions (defaults to config setting)
+            deduplication: Enable deduplication (defaults to settings)
+            force_update: Force update all chunks even if unchanged
 
         Returns:
             Dictionary with scraped content and metadata
@@ -332,7 +345,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     ),
                 )
                 rag_info = await _process_rag_if_requested(
-                    ctx, crawl_result, SourceType.WEBPAGE, process_with_rag=True
+                    ctx,
+                    crawl_result,
+                    SourceType.WEBPAGE,
+                    process_with_rag=True,
+                    deduplication=deduplication,
+                    force_update=force_update,
                 )
                 result.update(rag_info)
 
@@ -357,9 +375,10 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         ctx: Context,
         target: str,
         process_with_rag: bool = True,
+        # Deduplication parameters
+        deduplication: bool | None = None,
+        force_update: bool = False,
         # Web-specific parameters (ignored for file/repo crawling)
-        max_pages: int = 1000,
-        max_depth: int = 3,
         include_patterns: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
         sitemap_first: bool = True,
@@ -385,10 +404,10 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         Args:
             target: Target to crawl (auto-detected: directory path, repository URL, or website URL)
             process_with_rag: Whether to process content for RAG indexing
+            deduplication: Enable deduplication (defaults to settings)
+            force_update: Force update all chunks even if unchanged
 
             # Web crawling parameters (used when target is a website)
-            max_pages: Maximum number of pages to crawl (1-2000)
-            max_depth: Maximum depth to crawl (1-5)
             include_patterns: URL patterns to include (optional)
             exclude_patterns: URL patterns to exclude (optional)
             sitemap_first: Whether to check sitemap.xml first
@@ -464,19 +483,14 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
             else:  # website
                 url = type_params["url"]
+
+                # Use config settings for max_pages and max_depth
+                max_pages = settings.crawl_max_pages
+                max_depth = settings.crawl_max_depth
+
                 await ctx.info(
                     f"Starting website crawl: {url} (max_pages: {max_pages}, max_depth: {max_depth})"
                 )
-
-                # Validate web crawling parameters
-                if max_pages < 1:
-                    raise ToolError("max_pages must be between 1 and 2000")
-                if max_pages > 2000:
-                    raise ToolError("max_pages cannot exceed 2000")
-                if max_depth < 1:
-                    raise ToolError("max_depth must be between 1 and 5")
-                if max_depth > 5:
-                    raise ToolError("max_depth cannot exceed 5")
 
                 # Create crawl request
                 request = CrawlRequest(
@@ -514,7 +528,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
             # Process with RAG if requested using shared helper
             rag_info = await _process_rag_if_requested(
-                ctx, crawl_result, source_type, process_with_rag
+                ctx,
+                crawl_result,
+                source_type,
+                process_with_rag,
+                deduplication=deduplication,
+                force_update=force_update,
             )
             result.update(rag_info)
 

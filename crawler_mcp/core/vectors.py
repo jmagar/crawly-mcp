@@ -478,6 +478,85 @@ class VectorService:
             logger.error(f"Error deleting documents from source {source_url}: {e}")
             return 0
 
+    async def get_chunks_by_source(self, source_url: str) -> list[dict[str, Any]]:
+        """
+        Get all existing chunks for a source URL.
+
+        Args:
+            source_url: URL of the source to retrieve chunks from
+
+        Returns:
+            List of chunk documents with their IDs and content hashes
+        """
+        await self.ensure_collection()
+
+        try:
+            # Query all points with matching source_url
+            response = await self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source_url", match=MatchValue(value=source_url)
+                        )
+                    ]
+                ),
+                limit=10000,  # Large limit to get all chunks
+                with_payload=True,
+                with_vectors=False,  # Don't need embeddings for dedup
+            )
+
+            chunks = []
+            for point in response[0]:  # response is (points, next_offset)
+                chunk_data = {
+                    "id": point.id,
+                    "content": point.payload.get("content", ""),
+                    "content_hash": point.payload.get("content_hash"),
+                    "chunk_index": point.payload.get("chunk_index", 0),
+                    "metadata": point.payload.get("metadata", {}),
+                }
+                chunks.append(chunk_data)
+
+            logger.info(f"Retrieved {len(chunks)} chunks for source: {source_url}")
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error retrieving chunks for source {source_url}: {e}")
+            return []
+
+    async def delete_chunks_by_ids(self, chunk_ids: list[str]) -> int:
+        """
+        Delete specific chunks by their IDs.
+
+        Args:
+            chunk_ids: List of chunk IDs to delete
+
+        Returns:
+            Number of chunks deleted
+        """
+        if not chunk_ids:
+            return 0
+
+        await self.ensure_collection()
+
+        try:
+            # Delete points by IDs
+            result = await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=chunk_ids,  # Direct ID list
+            )
+
+            if result.status == UpdateStatus.COMPLETED:
+                logger.info(f"Deleted {len(chunk_ids)} chunks by ID")
+                return len(chunk_ids)
+            else:
+                logger.error(f"Failed to delete chunks by ID: {result.status}")
+                return 0
+
+        except Exception as e:
+            logger.error(f"Error deleting chunks by ID: {e}")
+            return 0
+
     async def get_sources_stats(self) -> dict[str, Any]:
         """
         Get statistics about sources in the vector database.

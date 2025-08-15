@@ -1,6 +1,6 @@
-# Crawlerr - FastMCP RAG-Enabled Web Crawling Server Project Memory
+# Crawler MCP - FastMCP RAG-Enabled Web Crawling Server Project Memory
 
-This file provides guidance to Claude Code (claude.ai/code) for developing this Crawlerr FastMCP server.
+This file provides guidance to Claude Code (claude.ai/code) for developing this Crawler MCP FastMCP server.
 
 ## FastMCP Framework Knowledge
 - **Primary Transport**: Streamable-HTTP is recommended for most servers.
@@ -27,13 +27,13 @@ crawler_mcp/
 │   ├── server.py           # Main server entry point
 │   ├── prompts/            # Reusable crawling and analysis prompt templates
 │   │   └── __init__.py
-│   ├── resources/          # MCP resources to expose crawled data
-│   │   └── __init__.py
 │   ├── middleware/         # FastMCP middleware (logging, error handling, progress tracking)
 │   │   └── __init__.py
 │   ├── models/             # Pydantic data models
 │   │   └── __init__.py
 │   ├── core/               # Core services (embeddings, vectors, rag, sources)
+│   │   └── __init__.py
+│   ├── crawlers/           # Crawler implementations (web, repository, directory)
 │   │   └── __init__.py
 │   └── tools/              # MCP tool implementations (scrape, crawl, rag_query, etc.)
 │       └── __init__.py
@@ -76,7 +76,7 @@ Once your server is ready, use the `fastmcp install` command to make it availabl
 
 - **Component Decorators**: Use `@mcp.tool`, `@mcp.resource("uri://path")`, and `@mcp.prompt` to define your server's capabilities.
 
-- **Separation of Concerns**: Keep core business logic in a dedicated `services/` directory. The MCP tool function should be a thin wrapper that handles context logging and calls the business logic. This makes the code more testable and reusable.
+- **Separation of Concerns**: Keep core business logic in the `core/` directory and crawler implementations in `crawlers/`. The MCP tool function should be a thin wrapper that handles context logging and calls the business logic. This makes the code more testable and reusable.
 
 - **Middleware**: Use middleware to add cross-cutting concerns. For development, new servers should include `ErrorHandlingMiddleware`, `LoggingMiddleware`, and `TimingMiddleware` by default. Add them using `mcp.add_middleware()`.
 

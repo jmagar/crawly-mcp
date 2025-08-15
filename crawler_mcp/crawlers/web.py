@@ -173,45 +173,49 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.info(
                 "Starting async iteration with stream=True and deep crawl strategy..."
             )
+
+            # Collect successful results first
+            successful_results = []
             with suppress_stdout():
                 async for result in await browser.arun(
                     url=first_url, config=run_config
                 ):
                     crawl_count += 1
-                    self.logger.info(
-                        f"Processing page {crawl_count}: {result.url} (success: {result.success})"
-                    )
-                    if hasattr(result, "metadata") and "score" in result.metadata:
-                        self.logger.info(f"Page score: {result.metadata['score']}")
                     if result.success:
-                        page_content = self._to_page_content(result)
-                        pages.append(page_content)
-                        total_bytes += len(page_content.content)
-                        unique_domains.add(urlparse(page_content.url).netloc)
-                        total_links_discovered += len(page_content.links)
-
-                        if (
-                            self.memory_manager
-                            and await self.memory_manager.check_memory_pressure()
-                        ):
-                            self.logger.warning(
-                                "Memory pressure detected during crawl, may slow down"
-                            )
-
-                        if progress_callback:
-                            progress_callback(
-                                len(pages),
-                                max_pages,
-                                f"Crawled: {page_content.url[:60]}...",
-                            )
+                        successful_results.append(result)
                     else:
                         errors.append(
                             f"Failed to crawl {result.url}: {result.error_message}"
                         )
-
-                    if len(pages) >= max_pages:
-                        self.logger.info(f"Reached max_pages limit of {max_pages}")
+                    if len(successful_results) >= max_pages:
                         break
+
+            # Process results outside suppress_stdout context for debugging
+            for result in successful_results:
+                self.logger.info(f"Processing successful result for {result.url}")
+                page_content = self._to_page_content(result)
+                self.logger.info(
+                    f"Created PageContent with {page_content.word_count} words for {result.url}"
+                )
+                pages.append(page_content)
+                total_bytes += len(page_content.content)
+                unique_domains.add(urlparse(page_content.url).netloc)
+                total_links_discovered += len(page_content.links)
+
+                if (
+                    self.memory_manager
+                    and await self.memory_manager.check_memory_pressure()
+                ):
+                    self.logger.warning(
+                        "Memory pressure detected during crawl, may slow down"
+                    )
+
+                if progress_callback:
+                    progress_callback(
+                        len(pages),
+                        max_pages,
+                        f"Crawled: {page_content.url[:60]}...",
+                    )
 
             self.logger.info(
                 f"Crawl loop completed: {crawl_count} results processed, {len(pages)} successful pages"
@@ -299,34 +303,168 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
-        # Prioritize fit markdown for clean, filtered content
-        fit_markdown = (
-            getattr(result.markdown, "fit_markdown", None)
-            if hasattr(result, "markdown")
-            else None
-        )
-        # Try multiple content extraction methods with better fallbacks
-        best_content = (
-            result.extracted_content
-            or fit_markdown
-            or result.markdown
-            or result.cleaned_html
-            or self._extract_text_from_html(result.html)  # Final fallback
-            or ""
-        )
+        import sys
 
-        # Calculate word count explicitly
+        # STREAMING CRAWL FIX: During streaming, Crawl4AI returns lazy-loaded objects with hash placeholders
+        # We need to force actual content extraction from the result object
+
+        best_content = ""
+
+        # Strategy 1: Try to force content extraction by calling str() on the result itself
+        # This might trigger lazy loading
+        try:
+            if hasattr(result, "__str__"):
+                result_str = str(result)
+                if result_str and len(result_str) > 100:  # Reasonable content length
+                    best_content = result_str
+                    print(
+                        f"CRAWL DEBUG - Used result.__str__(): {len(best_content)} chars",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        except Exception as e:
+            print(
+                f"CRAWL DEBUG - result.__str__() failed: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        # Strategy 2: Try accessing fit_markdown through different paths
+        if not best_content:
+            try:
+                # Check if markdown has a fit_markdown attribute that can be forced to load
+                if (
+                    hasattr(result, "markdown")
+                    and result.markdown
+                    and hasattr(result.markdown, "fit_markdown")
+                ):
+                    fit_md = result.markdown.fit_markdown
+                    if fit_md and len(str(fit_md)) > 100:
+                        best_content = str(fit_md)
+                        print(
+                            f"CRAWL DEBUG - Used fit_markdown: {len(best_content)} chars",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+            except Exception as e:
+                print(
+                    f"CRAWL DEBUG - fit_markdown access failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        # Strategy 3: Try to get the underlying content data from the result
+        if not best_content:
+            try:
+                # Look for content in various result attributes that might hold actual data
+                content_attrs = [
+                    "content",
+                    "text",
+                    "body",
+                    "data",
+                    "_content",
+                    "_text",
+                    "_data",
+                ]
+                for attr in content_attrs:
+                    if hasattr(result, attr):
+                        val = getattr(result, attr)
+                        if val and len(str(val)) > 100:
+                            best_content = str(val)
+                            print(
+                                f"CRAWL DEBUG - Used result.{attr}: {len(best_content)} chars",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            break
+            except Exception as e:
+                print(
+                    f"CRAWL DEBUG - content attribute access failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        # Strategy 4: Extract from HTML as last resort
+        if not best_content and result.html:
+            try:
+                # Check if html is actually a hash or real content
+                html_str = str(result.html)
+                if len(html_str) > 100:  # Real HTML content
+                    best_content = self._extract_text_from_html(html_str)
+                    print(
+                        f"CRAWL DEBUG - Used HTML extraction: {len(best_content)} chars",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"CRAWL DEBUG - HTML is only {len(html_str)} chars (likely hash)",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            except Exception as e:
+                print(
+                    f"CRAWL DEBUG - HTML extraction failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        # Strategy 5: Try to force evaluation of lazy-loaded objects
+        if not best_content:
+            try:
+                # For StringCompatibleMarkdown objects, try different access patterns
+                if hasattr(result, "markdown") and result.markdown:
+                    markdown_obj = result.markdown
+
+                    # Try calling methods that might force content loading
+                    force_methods = ["__call__", "get", "load", "evaluate", "resolve"]
+                    for method_name in force_methods:
+                        if hasattr(markdown_obj, method_name):
+                            try:
+                                method = getattr(markdown_obj, method_name)
+                                if callable(method):
+                                    forced_content = method()
+                                    if (
+                                        forced_content
+                                        and len(str(forced_content)) > 100
+                                    ):
+                                        best_content = str(forced_content)
+                                        print(
+                                            f"CRAWL DEBUG - Used {method_name}(): {len(best_content)} chars",
+                                            file=sys.stderr,
+                                            flush=True,
+                                        )
+                                        break
+                            except Exception:
+                                continue
+            except Exception as e:
+                print(
+                    f"CRAWL DEBUG - Force loading failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        # Calculate word count
         word_count = len(best_content.split()) if best_content.strip() else 0
 
-        # Log content extraction for debugging
-        self.logger.debug(
-            f"Content extraction for {result.url}: "
-            f"extracted_content={'present' if result.extracted_content else 'empty'}, "
-            f"fit_markdown={'present' if fit_markdown else 'empty'}, "
-            f"markdown={'present' if result.markdown else 'empty'}, "
-            f"cleaned_html={'present' if result.cleaned_html else 'empty'}, "
-            f"final_word_count={word_count}"
+        # Debug output to show what we found
+        debug_msg = (
+            f"CRAWL DEBUG - Final content extraction for {result.url}: "
+            f"content_length={len(best_content)}, "
+            f"word_count={word_count}"
         )
+        print(debug_msg, file=sys.stderr, flush=True)
+
+        # Legacy fit_markdown extraction for metadata
+        import contextlib
+
+        fit_markdown = None
+        with contextlib.suppress(Exception):
+            fit_markdown = (
+                getattr(result.markdown, "fit_markdown", None)
+                if hasattr(result, "markdown")
+                else None
+            )
 
         return PageContent(
             url=result.url,
@@ -334,7 +472,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             content=best_content,
             html=result.html,
             markdown=fit_markdown or result.markdown,
-            word_count=word_count,  # Explicitly set word count
+            word_count=word_count,
             links=[
                 link.get("href", link) if isinstance(link, dict) else link
                 for link in result.links.get("internal", [])
@@ -379,11 +517,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Deep crawl strategy (BestFirst preferred, BFS fallback)
         deep_strategy = self._build_deep_crawl_strategy(request, sitemap_seeds or [])
 
-        # Create content filter for fit markdown generation
+        # Create content filter for fit markdown generation - align with working scrape settings
         content_filter = PruningContentFilter(
-            threshold=0.2,  # Prune nodes below 20% relevance score (less aggressive)
+            threshold=0.45,  # Prune nodes below 45% relevance score
             threshold_type="dynamic",  # Dynamic scoring
-            min_word_threshold=2,  # Allow shorter text blocks
+            min_word_threshold=5,  # Ignore very short text blocks
         )
 
         # Create markdown generator with content filter
@@ -399,10 +537,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             word_count_threshold=getattr(settings, "crawl_min_words", 50),
             check_robots_txt=False,  # per user preference
             verbose=False,  # Disable verbose output for MCP compatibility
-            # Optimize for clean markdown extraction
+            # Optimize for clean markdown extraction - ensure content processing
             excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
             exclude_external_links=True,
             markdown_generator=markdown_generator,  # Enable fit markdown generation
+            # Force content processing for streaming
+            process_iframes=False,  # Disable for performance
         )
 
         # Optional: memory thresholds to align with our MemoryManager

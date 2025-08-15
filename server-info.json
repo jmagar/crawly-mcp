@@ -1,0 +1,394 @@
+{
+  "name": "crawler-mcp",
+  "instructions": null,
+  "fastmcp_version": "2.11.3",
+  "mcp_version": "1.13.0",
+  "server_version": null,
+  "tools": [
+    {
+      "key": "scrape",
+      "name": "scrape",
+      "description": "Scrape a single web page using Crawl4AI with advanced features.\n\nArgs:\n    url: The URL to scrape\n    extraction_strategy: Content extraction strategy (\"css\", \"llm\", \"cosine\", \"json_css\")\n    wait_for: CSS selector or JavaScript condition to wait for (optional)\n    include_raw_html: Whether to include raw HTML in the response\n    process_with_rag: Whether to process content for RAG indexing\n    enable_virtual_scroll: Enable virtual scroll for dynamic content (auto-detect if None)\n    virtual_scroll_count: Number of scroll actions (defaults to config setting)\n\nReturns:\n    Dictionary with scraped content and metadata",
+      "input_schema": {
+        "properties": {
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "extraction_strategy": {
+            "default": "css",
+            "title": "Extraction Strategy",
+            "type": "string"
+          },
+          "wait_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wait For"
+          },
+          "include_raw_html": {
+            "default": false,
+            "title": "Include Raw Html",
+            "type": "boolean"
+          },
+          "process_with_rag": {
+            "default": true,
+            "title": "Process With Rag",
+            "type": "boolean"
+          },
+          "enable_virtual_scroll": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enable Virtual Scroll"
+          },
+          "virtual_scroll_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Virtual Scroll Count"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "crawl",
+      "name": "crawl",
+      "description": "Smart crawl function that automatically detects input type and routes appropriately.\n\nThis unified tool handles all crawling scenarios:\n- Local directories: \"/home/user/code\", \"./src\", \"../docs\"\n- Git repositories: \"https://github.com/user/repo\", \"git@github.com:user/repo.git\"\n- Websites: \"https://example.com\", \"http://site.org/page\"\n\nThe function automatically detects the input type and uses the appropriate crawling method:\n- Directory crawling with intelligent file processing and relevance scoring\n- Repository cloning and analysis with adaptive batch processing\n- Website crawling with AI-powered site-wide discovery and deep crawling\n\nArgs:\n    target: Target to crawl (auto-detected: directory path, repository URL, or website URL)\n    process_with_rag: Whether to process content for RAG indexing\n\n    # Web crawling parameters (used when target is a website)\n    max_pages: Maximum number of pages to crawl (1-2000)\n    max_depth: Maximum depth to crawl (1-5)\n    include_patterns: URL patterns to include (optional)\n    exclude_patterns: URL patterns to exclude (optional)\n    sitemap_first: Whether to check sitemap.xml first\n\n    # File crawling parameters (used when target is a directory)\n    file_patterns: File patterns to include (e.g., ['*.py', '*.md'])\n    recursive: Whether to crawl subdirectories recursively\n\n    # Repository parameters (used when target is a git repository)\n    clone_path: Custom path to clone the repository (optional)\n\nReturns:\n    Dictionary with crawl results and statistics (format varies by detected type)\n\nExamples:\n    crawl(\"/home/jmagar/code\")  # → directory crawling\n    crawl(\"https://github.com/user/repo\")  # → repository cloning and crawling\n    crawl(\"https://example.com\")  # → website crawling",
+      "input_schema": {
+        "properties": {
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "process_with_rag": {
+            "default": true,
+            "title": "Process With Rag",
+            "type": "boolean"
+          },
+          "max_pages": {
+            "default": 1000,
+            "title": "Max Pages",
+            "type": "integer"
+          },
+          "max_depth": {
+            "default": 3,
+            "title": "Max Depth",
+            "type": "integer"
+          },
+          "include_patterns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Include Patterns"
+          },
+          "exclude_patterns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exclude Patterns"
+          },
+          "sitemap_first": {
+            "default": true,
+            "title": "Sitemap First",
+            "type": "boolean"
+          },
+          "file_patterns": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "File Patterns"
+          },
+          "recursive": {
+            "default": true,
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "clone_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Clone Path"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "rag_query",
+      "name": "rag_query",
+      "description": "Perform semantic search using RAG to find relevant documents.\n\nArgs:\n    query: Search query text\n    limit: Maximum number of results to return (1-100)\n    min_score: Minimum similarity score threshold (0.0-1.0)\n    source_filters: List of source URLs to filter by (optional)\n    rerank: Whether to apply re-ranking to improve results\n    include_content: Whether to include full content in results\n\nReturns:\n    Dictionary with search results and metadata",
+      "input_schema": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "min_score": {
+            "default": 0.0,
+            "title": "Min Score",
+            "type": "number"
+          },
+          "source_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Filters"
+          },
+          "rerank": {
+            "default": true,
+            "title": "Rerank",
+            "type": "boolean"
+          },
+          "include_content": {
+            "default": true,
+            "title": "Include Content",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "list_sources",
+      "name": "list_sources",
+      "description": "List and filter crawled sources with their metadata.\n\nArgs:\n    source_types: Filter by source types (\"webpage\", \"repository\", \"directory\")\n    domains: Filter by domains (e.g., [\"github.com\", \"example.com\"])\n    statuses: Filter by status (\"active\", \"inactive\", \"error\")\n    search_term: Search term to filter titles and URLs\n    limit: Maximum number of sources to return (1-200)\n    offset: Offset for pagination\n\nReturns:\n    Dictionary with filtered sources and metadata",
+      "input_schema": {
+        "properties": {
+          "source_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Types"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Domains"
+          },
+          "statuses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Statuses"
+          },
+          "search_term": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Search Term"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "get_rag_stats",
+      "name": "get_rag_stats",
+      "description": "Get comprehensive statistics about the RAG system.\n\nReturns:\n    Dictionary with RAG system statistics and health information",
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "delete_source",
+      "name": "delete_source",
+      "description": "Delete a source and all its associated documents from the RAG system.\n\nArgs:\n    source_url: URL of the source to delete\n    confirm: Confirmation flag (must be True to proceed)\n\nReturns:\n    Dictionary with deletion results",
+      "input_schema": {
+        "properties": {
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_url"
+        ],
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "health_check",
+      "name": "health_check",
+      "description": "Perform a comprehensive health check of all services.\n\nReturns:\n    Dictionary with health status of all components",
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    },
+    {
+      "key": "get_server_info",
+      "name": "get_server_info",
+      "description": "Get detailed information about the server configuration and capabilities.\n\nReturns:\n    Dictionary with server information",
+      "input_schema": {
+        "properties": {},
+        "type": "object"
+      },
+      "annotations": null,
+      "tags": null,
+      "enabled": true
+    }
+  ],
+  "prompts": [],
+  "resources": [],
+  "templates": [],
+  "capabilities": {
+    "tools": {
+      "listChanged": true
+    },
+    "resources": {
+      "subscribe": false,
+      "listChanged": false
+    },
+    "prompts": {
+      "listChanged": false
+    },
+    "logging": {}
+  }
+}

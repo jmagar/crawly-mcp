@@ -4,6 +4,8 @@ Optimized web crawling strategy with streaming and caching support.
 
 import contextlib
 import logging
+import os
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -17,6 +19,7 @@ from crawl4ai import (  # type: ignore
     CrawlerRunConfig,
 )
 from crawl4ai import CrawlResult as Crawl4aiResult  # type: ignore
+from crawl4ai.content_filter_strategy import PruningContentFilter  # type: ignore
 from crawl4ai.deep_crawling import (  # type: ignore
     BFSDeepCrawlStrategy,
 )
@@ -25,6 +28,9 @@ from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer  # type: ignor
 from crawl4ai.extraction_strategy import (  # type: ignore
     CosineStrategy,
     LLMExtractionStrategy,
+)
+from crawl4ai.markdown_generation_strategy import (
+    DefaultMarkdownGenerator,  # type: ignore
 )
 
 from ..config import settings
@@ -39,6 +45,19 @@ from ..models.crawl import (
 from .base import BaseCrawlStrategy
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def suppress_stdout():
+    """Context manager to suppress stdout output (redirect to devnull)."""
+    old_stdout = sys.stdout
+    try:
+        # Redirect stdout to devnull to prevent interference with MCP protocol
+        with open(os.devnull, "w") as devnull:
+            sys.stdout = devnull
+            yield
+    finally:
+        sys.stdout = old_stdout
 
 
 class WebCrawlStrategy(BaseCrawlStrategy):
@@ -113,12 +132,14 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 browser_type=settings.crawl_browser,
                 light_mode=True,  # Let Crawl4AI optimize performance
                 text_mode=getattr(settings, "crawl_block_images", False),
+                verbose=False,  # Suppress Crawl4AI console output for MCP compatibility
                 # NO extra_args - avoid flag conflicts
             )
 
-            # Create fresh AsyncWebCrawler instance
-            browser = AsyncWebCrawler(config=browser_config)
-            await browser.start()
+            # Create fresh AsyncWebCrawler instance with stdout suppressed
+            with suppress_stdout():
+                browser = AsyncWebCrawler(config=browser_config)
+                await browser.start()
 
             # Sitemap preseeding: discover and parse sitemap URLs to bias deep crawling
             sitemap_seeds = await self._discover_sitemap_seeds(
@@ -152,42 +173,45 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.info(
                 "Starting async iteration with stream=True and deep crawl strategy..."
             )
-            async for result in await browser.arun(url=first_url, config=run_config):
-                crawl_count += 1
-                self.logger.info(
-                    f"Processing page {crawl_count}: {result.url} (success: {result.success})"
-                )
-                if hasattr(result, "metadata") and "score" in result.metadata:
-                    self.logger.info(f"Page score: {result.metadata['score']}")
-                if result.success:
-                    page_content = self._to_page_content(result)
-                    pages.append(page_content)
-                    total_bytes += len(page_content.content)
-                    unique_domains.add(urlparse(page_content.url).netloc)
-                    total_links_discovered += len(page_content.links)
-
-                    if (
-                        self.memory_manager
-                        and await self.memory_manager.check_memory_pressure()
-                    ):
-                        self.logger.warning(
-                            "Memory pressure detected during crawl, may slow down"
-                        )
-
-                    if progress_callback:
-                        progress_callback(
-                            len(pages),
-                            max_pages,
-                            f"Crawled: {page_content.url[:60]}...",
-                        )
-                else:
-                    errors.append(
-                        f"Failed to crawl {result.url}: {result.error_message}"
+            with suppress_stdout():
+                async for result in await browser.arun(
+                    url=first_url, config=run_config
+                ):
+                    crawl_count += 1
+                    self.logger.info(
+                        f"Processing page {crawl_count}: {result.url} (success: {result.success})"
                     )
+                    if hasattr(result, "metadata") and "score" in result.metadata:
+                        self.logger.info(f"Page score: {result.metadata['score']}")
+                    if result.success:
+                        page_content = self._to_page_content(result)
+                        pages.append(page_content)
+                        total_bytes += len(page_content.content)
+                        unique_domains.add(urlparse(page_content.url).netloc)
+                        total_links_discovered += len(page_content.links)
 
-                if len(pages) >= max_pages:
-                    self.logger.info(f"Reached max_pages limit of {max_pages}")
-                    break
+                        if (
+                            self.memory_manager
+                            and await self.memory_manager.check_memory_pressure()
+                        ):
+                            self.logger.warning(
+                                "Memory pressure detected during crawl, may slow down"
+                            )
+
+                        if progress_callback:
+                            progress_callback(
+                                len(pages),
+                                max_pages,
+                                f"Crawled: {page_content.url[:60]}...",
+                            )
+                    else:
+                        errors.append(
+                            f"Failed to crawl {result.url}: {result.error_message}"
+                        )
+
+                    if len(pages) >= max_pages:
+                        self.logger.info(f"Reached max_pages limit of {max_pages}")
+                        break
 
             self.logger.info(
                 f"Crawl loop completed: {crawl_count} results processed, {len(pages)} successful pages"
@@ -241,7 +265,8 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             # Clean up browser instance
             if "browser" in locals():
                 try:
-                    await browser.close()
+                    with suppress_stdout():
+                        await browser.close()
                 except Exception as e:
                     self.logger.warning(f"Error closing browser: {e}")
 
@@ -249,15 +274,25 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
+        # Prioritize fit markdown for clean, filtered content
+        fit_markdown = (
+            getattr(result.markdown, "fit_markdown", None)
+            if hasattr(result, "markdown")
+            else None
+        )
+        best_content = (
+            result.extracted_content
+            or fit_markdown
+            or result.markdown
+            or result.cleaned_html
+            or ""
+        )
         return PageContent(
             url=result.url,
             title=result.metadata.get("title", ""),
-            content=result.extracted_content
-            or result.cleaned_html
-            or result.markdown
-            or "",
+            content=best_content,
             html=result.html,
-            markdown=result.markdown,
+            markdown=fit_markdown or result.markdown,
             links=[
                 link.get("href", link) if isinstance(link, dict) else link
                 for link in result.links.get("internal", [])
@@ -272,10 +307,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else [],
             metadata={
                 "depth": result.metadata.get("depth", 0),
-                "word_count": len((result.cleaned_html or "").split()),
+                "word_count": len(best_content.split()),
                 "status_code": result.status_code,
                 "response_headers": dict(result.response_headers or {}),
                 "chunk_metadata": getattr(result, "chunk_metadata", {}),
+                "has_fit_markdown": fit_markdown is not None,
             },
             timestamp=datetime.fromtimestamp(time.time()),
         )
@@ -302,7 +338,17 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Deep crawl strategy (BestFirst preferred, BFS fallback)
         deep_strategy = self._build_deep_crawl_strategy(request, sitemap_seeds or [])
 
-        # Base run config
+        # Create content filter for fit markdown generation
+        content_filter = PruningContentFilter(
+            threshold=0.45,  # Prune nodes below 45% relevance score
+            threshold_type="dynamic",  # Dynamic scoring
+            min_word_threshold=5,  # Ignore very short text blocks
+        )
+
+        # Create markdown generator with content filter
+        markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
+
+        # Base run config with fit markdown optimization
         run_config = CrawlerRunConfig(
             deep_crawl_strategy=deep_strategy,
             stream=True,  # CRITICAL: Enable streaming for multi-page deep crawling
@@ -311,7 +357,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             remove_overlay_elements=getattr(settings, "crawl_remove_overlays", True),
             word_count_threshold=getattr(settings, "crawl_min_words", 50),
             check_robots_txt=False,  # per user preference
-            verbose=getattr(settings, "crawl_verbose", True),
+            verbose=False,  # Disable verbose output for MCP compatibility
+            # Optimize for clean markdown extraction
+            excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
+            exclude_external_links=True,
+            markdown_generator=markdown_generator,  # Enable fit markdown generation
         )
 
         # Optional: memory thresholds to align with our MemoryManager
@@ -463,12 +513,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.info(
                 f"Creating BFS deep crawl strategy: max_depth={max_depth}, max_pages={max_pages}, filter_chain={'present' if filter_chain else 'None'}"
             )
-            # Re-enable filter_chain with improved exclusion patterns
+            # Disable filter_chain - any filtering prevents multi-page crawling
             return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
                 max_depth=max_depth,
                 include_external=False,
                 max_pages=max_pages,
-                filter_chain=filter_chain,  # Re-enabled with comprehensive file extension filtering
+                # filter_chain=filter_chain,  # Disabled - even minimal filters break it
             )
         except Exception as e:
             self.logger.warning(f"Failed to create BFS strategy: {e}")

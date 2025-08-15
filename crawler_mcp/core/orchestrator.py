@@ -3,7 +3,10 @@ Slim crawl orchestrator that delegates to specialized managers and strategies.
 Replaces the massive crawler_service.py with a clean, maintainable architecture.
 """
 
+import contextlib
 import logging
+import os
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -27,6 +30,19 @@ from ..models.crawl import (
 from .memory import MemoryManager, cleanup_memory_manager, get_memory_manager
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def suppress_stdout():
+    """Context manager to suppress stdout output (redirect to devnull)."""
+    old_stdout = sys.stdout
+    try:
+        # Redirect stdout to devnull to prevent interference with MCP protocol
+        with open(os.devnull, "w") as devnull:
+            sys.stdout = devnull
+            yield
+    finally:
+        sys.stdout = old_stdout
 
 
 class CrawlerService:
@@ -221,38 +237,72 @@ class CrawlerService:
         self.logger.debug(f"Scraping single page: {url}")
 
         from crawl4ai import AsyncWebCrawler, BrowserConfig  # type: ignore
+        from crawl4ai.content_filter_strategy import (
+            PruningContentFilter,  # type: ignore
+        )
+        from crawl4ai.markdown_generation_strategy import (
+            DefaultMarkdownGenerator,  # type: ignore
+        )
 
         # Create minimal browser config
         browser_config = BrowserConfig(
             headless=settings.crawl_headless,
             browser_type=settings.crawl_browser,
             light_mode=True,
+            verbose=False,  # Suppress Crawl4AI output for MCP compatibility
             text_mode=getattr(settings, "crawl_block_images", False),
         )
 
-        browser = AsyncWebCrawler(config=browser_config)
-        await browser.start()
+        with suppress_stdout():
+            browser = AsyncWebCrawler(config=browser_config)
+            await browser.start()
 
         try:
-            # Use Crawl4AI to scrape the page
-            result = await browser.arun(
-                url=url,
-                bypass_cache=not settings.crawl_enable_caching,
-                process_iframes=False,  # Disable for performance
-                remove_overlay_elements=settings.crawl_remove_overlays,
-                word_count_threshold=settings.crawl_min_words,
+            # Create content filter for fit markdown generation
+            content_filter = PruningContentFilter(
+                threshold=0.45,  # Prune nodes below 45% relevance score
+                threshold_type="dynamic",  # Dynamic scoring
+                min_word_threshold=5,  # Ignore very short text blocks
             )
+
+            # Create markdown generator with content filter
+            markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
+
+            # Use Crawl4AI to scrape the page with fit markdown optimization
+            with suppress_stdout():
+                result = await browser.arun(
+                    url=url,
+                    bypass_cache=not settings.crawl_enable_caching,
+                    process_iframes=False,  # Disable for performance
+                    remove_overlay_elements=settings.crawl_remove_overlays,
+                    word_count_threshold=settings.crawl_min_words,
+                    # Optimize for clean markdown extraction
+                    excluded_tags=[
+                        "nav",
+                        "footer",
+                        "header",
+                        "aside",
+                        "script",
+                        "style",
+                    ],
+                    exclude_external_links=True,
+                    markdown_generator=markdown_generator,  # Enable fit markdown generation
+                )
 
             if not result.success:
                 raise Exception(f"Scraping failed: {result.error_message}")
 
-            # Create PageContent
+            # Create PageContent - prioritize fit markdown for clean content
             page_content = PageContent(
                 url=url,
                 title=result.metadata.get("title", ""),
-                content=result.cleaned_html or result.markdown or "",
+                content=getattr(result.markdown, "fit_markdown", None)
+                or result.markdown
+                or result.cleaned_html
+                or "",
                 html=result.html,
-                markdown=result.markdown,
+                markdown=getattr(result.markdown, "fit_markdown", None)
+                or result.markdown,
                 links=[
                     link.get("href", link) if isinstance(link, dict) else link
                     for link in result.links.get("internal", [])
@@ -267,12 +317,24 @@ class CrawlerService:
                 else [],
                 metadata={
                     "extraction_strategy": extraction_strategy,
-                    "word_count": len((result.cleaned_html or "").split()),
+                    "word_count": len(
+                        (
+                            getattr(result.markdown, "fit_markdown", None)
+                            or result.markdown
+                            or ""
+                        ).split()
+                    ),
                     "status_code": result.status_code,
                     "response_headers": dict(result.response_headers or {}),
                 },
                 timestamp=datetime.fromtimestamp(time.time()),
-                word_count=len((result.cleaned_html or "").split()),
+                word_count=len(
+                    (
+                        getattr(result.markdown, "fit_markdown", None)
+                        or result.markdown
+                        or ""
+                    ).split()
+                ),
             )
 
             return page_content
@@ -281,7 +343,8 @@ class CrawlerService:
             self.logger.error(f"Failed to scrape {url}: {e}")
             raise
         finally:
-            await browser.close()
+            with suppress_stdout():
+                await browser.close()
 
     async def get_health_status(self) -> dict[str, Any]:
         """Get health status of all crawler components."""

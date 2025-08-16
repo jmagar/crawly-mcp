@@ -36,7 +36,7 @@ class QueryCache:
     """
 
     def __init__(self, max_size: int = 1000, ttl_minutes: int = 15):
-        self.cache: dict[str, tuple[Any, datetime]] = {}
+        self.cache: dict[str, tuple[RagResult, datetime]] = {}
         self.max_size = max_size
         self.ttl = timedelta(minutes=ttl_minutes)
 
@@ -66,7 +66,7 @@ class QueryCache:
         min_score: float,
         source_filters: list[str] | None,
         rerank: bool,
-    ) -> Any | None:
+    ) -> RagResult | None:
         """Get cached result if it exists and hasn't expired."""
         cache_key = self._generate_cache_key(
             query, limit, min_score, source_filters, rerank
@@ -91,7 +91,7 @@ class QueryCache:
         min_score: float,
         source_filters: list[str] | None,
         rerank: bool,
-        result: Any,
+        result: RagResult,
     ) -> None:
         """Cache a result with current timestamp."""
         cache_key = self._generate_cache_key(

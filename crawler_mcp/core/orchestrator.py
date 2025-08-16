@@ -237,11 +237,12 @@ class CrawlerService:
         self.logger.debug(f"Scraping single page: {url}")
 
         from crawl4ai import AsyncWebCrawler, BrowserConfig  # type: ignore
-        from crawl4ai.content_filter_strategy import (
-            PruningContentFilter,  # type: ignore
+
+        from ..types.crawl4ai_types import (
+            DefaultMarkdownGeneratorImpl as DefaultMarkdownGenerator,
         )
-        from crawl4ai.markdown_generation_strategy import (
-            DefaultMarkdownGenerator,  # type: ignore
+        from ..types.crawl4ai_types import (
+            PruningContentFilterImpl as PruningContentFilter,
         )
 
         # Create minimal browser config

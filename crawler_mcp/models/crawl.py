@@ -112,11 +112,13 @@ class CrawlResult(BaseModel):
 
     @property
     def success_rate(self) -> float:
-        """Calculate success rate as percentage."""
-        total = self.statistics.total_pages_requested
-        if total == 0:
+        """Calculate success rate as percentage of actual pages attempted."""
+        total_attempted = (
+            self.statistics.total_pages_crawled + self.statistics.total_pages_failed
+        )
+        if total_attempted == 0:
             return 0.0
-        return (self.statistics.total_pages_crawled / total) * 100.0
+        return (self.statistics.total_pages_crawled / total_attempted) * 100.0
 
     @property
     def is_complete(self) -> bool:

@@ -29,9 +29,6 @@ from crawl4ai.extraction_strategy import (  # type: ignore
     CosineStrategy,
     LLMExtractionStrategy,
 )
-from crawl4ai.markdown_generation_strategy import (
-    DefaultMarkdownGenerator,  # type: ignore
-)
 
 from ..config import settings
 from ..core.memory import MemoryManager, get_memory_manager
@@ -42,6 +39,7 @@ from ..models.crawl import (
     CrawlStatus,
     PageContent,
 )
+from ..types.crawl4ai_types import DefaultMarkdownGeneratorImpl
 from .base import BaseCrawlStrategy
 
 logger = logging.getLogger(__name__)
@@ -213,6 +211,23 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                         )
                         async for result in crawl_result:
                             crawl_count += 1
+
+                            # Pre-check for unexpected types (defensive programming)
+                            if isinstance(result, int):
+                                self.logger.warning(
+                                    "Received integer %d instead of CrawlResult in streaming mode, skipping",
+                                    result,
+                                )
+                                continue
+
+                            # Ensure result is a CrawlResult object
+                            if not hasattr(result, "success"):
+                                self.logger.warning(
+                                    "Received unexpected type %s in streaming mode, skipping",
+                                    type(result).__name__,
+                                )
+                                continue
+
                             if result.success:
                                 try:
                                     sanitized_result = self._sanitize_crawl_result(
@@ -476,25 +491,74 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         """Sanitize CrawlResult to prevent integer hash issues with markdown field."""
         import sys
 
-        from crawl4ai.models import MarkdownGenerationResult
+        from ..types.crawl4ai_types import (
+            MarkdownGenerationResultImpl as MarkdownGenerationResult,
+        )
 
-        # Check if the private _markdown field contains an integer hash
-        if hasattr(result, "_markdown") and isinstance(result._markdown, int):
+        try:
+            # Check if the private _markdown field contains an integer hash
+            if hasattr(result, "_markdown") and isinstance(result._markdown, int):
+                print(
+                    f"CRAWL DEBUG - Found integer _markdown ({result._markdown}), replacing with empty MarkdownGenerationResult",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                # Replace the integer hash with an empty MarkdownGenerationResult
+                result._markdown = MarkdownGenerationResult(
+                    raw_markdown="",
+                    markdown_with_citations="",
+                    references_markdown="",
+                    fit_markdown=None,
+                    fit_html=None,
+                )
+
+            # Also check if markdown property access would fail
+            # This is a defensive check
+            if hasattr(result, "markdown"):
+                try:
+                    # Try to access it to see if it would error
+                    _ = result.markdown
+                except AttributeError as e:
+                    if "'int' object has no attribute" in str(e):
+                        print(
+                            f"CRAWL DEBUG - Markdown property access failed, force setting safe value for {result.url}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        # Force set a safe markdown value
+                        result._markdown = MarkdownGenerationResult(
+                            raw_markdown="",
+                            markdown_with_citations="",
+                            references_markdown="",
+                            fit_markdown=None,
+                            fit_html=None,
+                        )
+        except Exception as e:
             print(
-                f"CRAWL DEBUG - Found integer _markdown ({result._markdown}), replacing with empty MarkdownGenerationResult",
+                f"CRAWL DEBUG - Sanitization warning for {getattr(result, 'url', 'unknown')}: {e}",
                 file=sys.stderr,
                 flush=True,
             )
-            # Replace the integer hash with an empty MarkdownGenerationResult
-            result._markdown = MarkdownGenerationResult(
-                raw_markdown="",
-                markdown_with_citations="",
-                references_markdown="",
-                fit_markdown=None,
-                fit_html=None,
-            )
 
         return result
+
+    def _safe_get_markdown(self, result: Crawl4aiResult) -> str:
+        """Safely get markdown content from result, handling integer hash issues."""
+        try:
+            # Try to access markdown property
+            markdown = result.markdown
+            if isinstance(markdown, str):
+                return markdown
+            elif hasattr(markdown, "raw_markdown"):
+                return markdown.raw_markdown
+            else:
+                return str(markdown) if markdown else ""
+        except AttributeError as e:
+            if "'int' object has no attribute" in str(e):
+                # Return empty string if we hit the integer hash issue
+                return ""
+            else:
+                raise
 
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
@@ -504,12 +568,29 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Sanitize the result first to prevent integer hash issues
         result = self._sanitize_crawl_result(result)
 
-        # Initial inspection of the markdown field
-        print(
-            f"CRAWL DEBUG - Inspecting result.markdown: type={type(result.markdown)}, value={result.markdown}",
-            file=sys.stderr,
-            flush=True,
-        )
+        # Initial inspection of the markdown field - SAFE ACCESS
+        try:
+            # Only access markdown if it's safe
+            if hasattr(result, "_markdown") and not isinstance(
+                getattr(result, "_markdown", None), int
+            ):
+                print(
+                    f"CRAWL DEBUG - Markdown field is safe to access for {result.url}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                print(
+                    f"CRAWL DEBUG - Markdown field contains integer hash for {result.url}, skipping access",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        except Exception as e:
+            print(
+                f"CRAWL DEBUG - Cannot inspect markdown for {result.url}: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
 
         best_content = ""
 
@@ -716,7 +797,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             title=result.metadata.get("title", ""),
             content=best_content,
             html=result.html,
-            markdown=fit_markdown or result.markdown,
+            markdown=fit_markdown or self._safe_get_markdown(result),
             word_count=word_count,
             links=[
                 link.get("href", link) if isinstance(link, dict) else link
@@ -770,7 +851,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )
 
         # Create markdown generator with content filter
-        markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
+        markdown_generator = DefaultMarkdownGeneratorImpl(content_filter=content_filter)
 
         # Base run config with fit markdown optimization
         # NOTE: Deep crawl requires streaming mode (stream=True) to work properly

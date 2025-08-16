@@ -96,7 +96,7 @@ class ProgressMiddleware:
     def __init__(self, app: Callable[[Request], Awaitable[Response]]):
         self.app = app
         self._active_operations: dict[str, ProgressTracker] = {}
-        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     async def __call__(self, request: Request) -> Response:
         """

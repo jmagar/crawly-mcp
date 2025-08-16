@@ -34,9 +34,9 @@ services:
       - --dtype
       - float16
       - --max-concurrent-requests
-      - "256"
+      - "512"
       - --max-batch-tokens
-      - "131072"
+      - "1000"
       - --max-batch-requests
       - "512"
       - --max-client-batch-size
@@ -44,8 +44,10 @@ services:
       - --pooling
       - "last-token"
       - --tokenization-workers
-      - "8"
+      - "12"
       - --auto-truncate
+      - --max-sequence-length
+      - "512"
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=0

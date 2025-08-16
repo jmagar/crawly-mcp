@@ -61,7 +61,7 @@ class CrawlerrSettings(BaseSettings):
 
     # Chunking Configuration
     chunk_size: int = Field(default=1024, alias="CHUNK_SIZE", gt=0, le=32768)
-    chunk_overlap: int = Field(default=50, alias="CHUNK_OVERLAP", ge=0)
+    chunk_overlap: int = Field(default=200, alias="CHUNK_OVERLAP", ge=0)
     word_to_token_ratio: float = Field(default=1.4, alias="WORD_TO_TOKEN_RATIO", gt=0)
 
     # Reranker Configuration

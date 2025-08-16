@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -28,6 +28,104 @@ WORD_TO_TOKEN_RATIO = 1.3  # General estimate for English text
 QWEN3_WORD_TO_TOKEN_RATIO = (
     1.4  # More accurate for Qwen3 tokenizer based on empirical testing
 )
+
+
+class QueryCache:
+    """
+    Simple in-memory cache for RAG query results with TTL support.
+    """
+
+    def __init__(self, max_size: int = 1000, ttl_minutes: int = 15):
+        self.cache: dict[str, tuple[Any, datetime]] = {}
+        self.max_size = max_size
+        self.ttl = timedelta(minutes=ttl_minutes)
+
+    def _generate_cache_key(
+        self,
+        query: str,
+        limit: int,
+        min_score: float,
+        source_filters: list[str] | None,
+        rerank: bool,
+    ) -> str:
+        """Generate a deterministic cache key from query parameters."""
+        key_components = [
+            query.strip().lower(),
+            str(limit),
+            str(min_score),
+            str(sorted(source_filters) if source_filters else ""),
+            str(rerank),
+        ]
+        key_string = "|".join(key_components)
+        return hashlib.md5(key_string.encode()).hexdigest()
+
+    def get(
+        self,
+        query: str,
+        limit: int,
+        min_score: float,
+        source_filters: list[str] | None,
+        rerank: bool,
+    ) -> Any | None:
+        """Get cached result if it exists and hasn't expired."""
+        cache_key = self._generate_cache_key(
+            query, limit, min_score, source_filters, rerank
+        )
+
+        if cache_key in self.cache:
+            result, timestamp = self.cache[cache_key]
+            if datetime.utcnow() - timestamp < self.ttl:
+                logger.debug(f"Cache hit for query: {query[:50]}...")
+                return result
+            else:
+                # Expired, remove from cache
+                del self.cache[cache_key]
+                logger.debug(f"Cache expired for query: {query[:50]}...")
+
+        return None
+
+    def put(
+        self,
+        query: str,
+        limit: int,
+        min_score: float,
+        source_filters: list[str] | None,
+        rerank: bool,
+        result: Any,
+    ) -> None:
+        """Cache a result with current timestamp."""
+        cache_key = self._generate_cache_key(
+            query, limit, min_score, source_filters, rerank
+        )
+
+        # If cache is full, remove oldest entry
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][1])
+            del self.cache[oldest_key]
+            logger.debug("Cache full, removed oldest entry")
+
+        self.cache[cache_key] = (result, datetime.utcnow())
+        logger.debug(f"Cached result for query: {query[:50]}...")
+
+    def clear(self) -> None:
+        """Clear all cached results."""
+        self.cache.clear()
+        logger.info("Query cache cleared")
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get cache statistics."""
+        now = datetime.utcnow()
+        valid_entries = sum(
+            1 for _, timestamp in self.cache.values() if now - timestamp < self.ttl
+        )
+
+        return {
+            "total_entries": len(self.cache),
+            "valid_entries": valid_entries,
+            "expired_entries": len(self.cache) - valid_entries,
+            "max_size": self.max_size,
+            "ttl_minutes": self.ttl.total_seconds() / 60,
+        }
 
 
 def find_paragraph_boundary(search_text: str, ideal_end: int) -> int | None:
@@ -96,6 +194,9 @@ class RagService:
 
         self.embedding_service = EmbeddingService()
         self.vector_service = VectorService()
+
+        # Initialize query cache for performance optimization
+        self.query_cache = QueryCache(max_size=1000, ttl_minutes=15)
 
         # Add missing attributes from settings
         self.chunk_size = settings.chunk_size
@@ -925,6 +1026,14 @@ class RagService:
         """
         start_time = time.time()
 
+        # Check cache first for exact query match
+        cached_result = self.query_cache.get(
+            query.query, query.limit, query.min_score, query.source_filters, rerank
+        )
+        if cached_result is not None:
+            logger.info(f"Cache hit for query: '{query.query[:50]}...'")
+            return cached_result
+
         try:
             # Generate query embedding
             embedding_start = time.time()
@@ -979,6 +1088,16 @@ class RagService:
                 f"RAG query completed: {len(filtered_matches)} matches in {processing_time:.3f}s "
                 f"(embed: {embedding_time:.3f}s, search: {search_time:.3f}s"
                 f"{f', rerank: {rerank_time:.3f}s' if rerank_time else ''})"
+            )
+
+            # Cache the result for future queries
+            self.query_cache.put(
+                query.query,
+                query.limit,
+                query.min_score,
+                query.source_filters,
+                rerank,
+                result,
             )
 
             return result
@@ -1166,6 +1285,7 @@ class RagService:
                 "health": health,
                 "collection": collection_info,
                 "sources": source_stats,
+                "cache": self.query_cache.get_stats(),
                 "config": {
                     "chunk_size_tokens": self.chunk_size
                     if self.tokenizer_type == "token"

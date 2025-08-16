@@ -111,14 +111,26 @@ class VectorService:
                 logger.info(f"Collection '{self.collection_name}' already exists")
                 return True
 
-            # Create collection with client recreation on error
-            logger.info(f"Creating collection '{self.collection_name}'")
+            # Create collection with optimized HNSW configuration
+            logger.info(
+                f"Creating collection '{self.collection_name}' with optimized HNSW config"
+            )
             try:
                 await self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
                         size=self.vector_size, distance=self.distance
                     ),
+                    hnsw_config={
+                        "m": 16,  # Production value for accuracy/memory balance
+                        "ef_construct": 128,  # Build-time accuracy
+                        "max_indexing_threads": 0,  # Use all available threads
+                    },
+                    optimizers_config={
+                        "indexing_threshold": 20000,  # Batch indexing for performance
+                        "memmap_threshold": 50000,  # Memory management threshold
+                        "max_segment_size": 1000000,  # Optimize segment size
+                    },
                 )
             except Exception as e:
                 if "client has been closed" in str(e):
@@ -131,6 +143,16 @@ class VectorService:
                         vectors_config=VectorParams(
                             size=self.vector_size, distance=self.distance
                         ),
+                        hnsw_config={
+                            "m": 16,  # Production value for accuracy/memory balance
+                            "ef_construct": 128,  # Build-time accuracy
+                            "max_indexing_threads": 0,  # Use all available threads
+                        },
+                        optimizers_config={
+                            "indexing_threshold": 20000,  # Batch indexing for performance
+                            "memmap_threshold": 50000,  # Memory management threshold
+                            "max_segment_size": 1000000,  # Optimize segment size
+                        },
                     )
                 else:
                     raise
@@ -310,7 +332,11 @@ class VectorService:
                 # Qdrant expects a list, not a Sequence
                 search_filter = Filter(must=list(filter_conditions))
 
-            # Perform search using modern query_points API
+            # Dynamic ef parameter based on query complexity
+            # Higher ef for better accuracy when needed
+            ef_value = min(256, max(64, limit * 4))  # 4x limit, capped at 256
+
+            # Perform search using modern query_points API with optimized search params
             query_response = await self.client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector,
@@ -319,6 +345,9 @@ class VectorService:
                 query_filter=search_filter,
                 with_payload=True,
                 with_vectors=False,  # Don't return vectors to save bandwidth
+                search_params={
+                    "hnsw": {"ef": ef_value}
+                },  # Dynamic ef for optimal speed/accuracy
             )
 
             # Extract results - handle different return types from query_points

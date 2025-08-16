@@ -85,7 +85,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             request.max_pages < 1 or request.max_pages > 2000
         ):
             self.logger.error(
-                f"max_pages must be between 1 and 2000, got {request.max_pages}"
+                "max_pages must be between 1 and 2000, got %s", request.max_pages
             )
             return False
 
@@ -93,7 +93,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             request.max_depth < 1 or request.max_depth > 5
         ):
             self.logger.error(
-                f"max_depth must be between 1 and 5, got {request.max_depth}"
+                "max_depth must be between 1 and 5, got %s", request.max_depth
             )
             return False
 
@@ -107,11 +107,16 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         """
         Execute optimized web crawling by delegating to the crawl4ai library.
         """
+
+        self.logger.info("WebCrawlStrategy.execute() started for URL: %s", request.url)
         await self._initialize_managers()
 
         start_time = time.time()
         self.logger.info(
-            f"Starting web crawl: {request.url} (max_pages: {request.max_pages}, max_depth: {request.max_depth})"
+            "Starting web crawl: %s (max_pages: %s, max_depth: %s)",
+            request.url,
+            request.max_pages,
+            request.max_depth,
         )
 
         await self.pre_execute_setup()
@@ -146,16 +151,23 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 first_url, request.max_pages or 100
             )
             self.logger.info(
-                f"Discovered {len(sitemap_seeds)} sitemap seeds: {sitemap_seeds[:5]}..."
+                "Discovered %s sitemap seeds: %s...",
+                len(sitemap_seeds),
+                sitemap_seeds[:5],
             )
 
             run_config = await self._build_run_config(request, sitemap_seeds)
             self.logger.info(
-                f"Deep crawl strategy configured: {type(run_config.deep_crawl_strategy).__name__ if run_config.deep_crawl_strategy else 'None'}"
+                "Deep crawl strategy configured: %s",
+                type(run_config.deep_crawl_strategy).__name__
+                if run_config.deep_crawl_strategy
+                else "None",
             )
             if run_config.deep_crawl_strategy:
                 self.logger.info(
-                    f"Max pages: {getattr(run_config.deep_crawl_strategy, 'max_pages', 'Unknown')}, Max depth: {getattr(run_config.deep_crawl_strategy, 'max_depth', 'Unknown')}"
+                    "Max pages: %s, Max depth: %s",
+                    getattr(run_config.deep_crawl_strategy, "max_pages", "Unknown"),
+                    getattr(run_config.deep_crawl_strategy, "max_depth", "Unknown"),
                 )
 
             pages = []
@@ -177,25 +189,179 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             # Collect successful results first
             successful_results = []
             with suppress_stdout():
-                async for result in await browser.arun(
-                    url=first_url, config=run_config
-                ):
-                    crawl_count += 1
-                    if result.success:
-                        successful_results.append(result)
-                    else:
-                        errors.append(
-                            f"Failed to crawl {result.url}: {result.error_message}"
+                try:
+                    # Get result from arun - type depends on config.stream setting
+                    self.logger.info(
+                        "About to call browser.arun with stream=%s", run_config.stream
+                    )
+                    crawl_result = await browser.arun(url=first_url, config=run_config)
+                    self.logger.info("browser.arun completed successfully")
+
+                    # Debug: Log the actual type we received
+                    self.logger.info(
+                        "CRAWL DEBUG: crawl_result type = %s, stream=%s, deep_crawl=%s",
+                        type(crawl_result).__name__,
+                        run_config.stream,
+                        run_config.deep_crawl_strategy is not None,
+                    )
+
+                    # Handle different return types based on deep crawl strategy and stream setting
+                    if hasattr(crawl_result, "__aiter__"):
+                        # AsyncGenerator case (when stream=True)
+                        self.logger.info(
+                            "Processing AsyncGenerator results (stream=True mode)"
                         )
-                    if len(successful_results) >= max_pages:
-                        break
+                        async for result in crawl_result:
+                            crawl_count += 1
+                            if result.success:
+                                try:
+                                    sanitized_result = self._sanitize_crawl_result(
+                                        result
+                                    )
+                                    successful_results.append(sanitized_result)
+                                except AttributeError as e:
+                                    if (
+                                        "'int' object has no attribute 'raw_markdown'"
+                                        in str(e)
+                                    ):
+                                        self.logger.warning(
+                                            "Caught integer markdown hash issue for %s, skipping result",
+                                            result.url,
+                                        )
+                                        continue
+                                    else:
+                                        raise
+                            else:
+                                errors.append(
+                                    f"Failed to crawl {result.url}: {result.error_message}"
+                                )
+                            if len(successful_results) >= max_pages:
+                                break
+                    elif isinstance(crawl_result, list):
+                        # List case (deep crawl mode returns list even when stream=False)
+                        self.logger.info(
+                            "Processing List results (deep crawl mode with stream=False)"
+                        )
+                        for result in crawl_result:
+                            crawl_count += 1
+                            if result.success:
+                                try:
+                                    sanitized_result = self._sanitize_crawl_result(
+                                        result
+                                    )
+                                    successful_results.append(sanitized_result)
+                                except AttributeError as e:
+                                    if (
+                                        "'int' object has no attribute 'raw_markdown'"
+                                        in str(e)
+                                    ):
+                                        self.logger.warning(
+                                            "Caught integer markdown hash issue for %s, skipping result",
+                                            result.url,
+                                        )
+                                        continue
+                                    else:
+                                        raise
+                            else:
+                                errors.append(
+                                    f"Failed to crawl {result.url}: {result.error_message}"
+                                )
+                            if len(successful_results) >= max_pages:
+                                break
+                    elif isinstance(crawl_result, Crawl4aiResult):
+                        # Single result case (when stream=False and no deep crawl)
+                        crawl_count = 1
+                        self.logger.info(
+                            "Processing single CrawlResult (stream=False, no deep crawl)"
+                        )
+                        if crawl_result.success:
+                            try:
+                                sanitized_result = self._sanitize_crawl_result(
+                                    crawl_result
+                                )
+                                successful_results.append(sanitized_result)
+                                self.logger.info(
+                                    "Successfully processed single result for %s",
+                                    crawl_result.url,
+                                )
+                            except AttributeError as e:
+                                if (
+                                    "'int' object has no attribute 'raw_markdown'"
+                                    in str(e)
+                                ):
+                                    self.logger.warning(
+                                        "Caught integer markdown hash issue for %s, skipping result",
+                                        crawl_result.url,
+                                    )
+                                else:
+                                    raise
+                        else:
+                            errors.append(
+                                f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}"
+                            )
+                    elif hasattr(crawl_result, "success") and hasattr(
+                        crawl_result, "url"
+                    ):
+                        # Handle CrawlResultContainer and other container types
+                        crawl_count = 1
+                        self.logger.info(
+                            "Processing container result type: %s",
+                            type(crawl_result).__name__,
+                        )
+                        if crawl_result.success:
+                            try:
+                                sanitized_result = self._sanitize_crawl_result(
+                                    crawl_result
+                                )
+                                successful_results.append(sanitized_result)
+                                self.logger.info(
+                                    "Successfully processed container result for %s",
+                                    crawl_result.url,
+                                )
+                            except AttributeError as e:
+                                if (
+                                    "'int' object has no attribute 'raw_markdown'"
+                                    in str(e)
+                                ):
+                                    self.logger.warning(
+                                        "Caught integer markdown hash issue for %s, skipping result",
+                                        crawl_result.url,
+                                    )
+                                else:
+                                    raise
+                        else:
+                            errors.append(
+                                "Failed to crawl {}: {}".format(
+                                    crawl_result.url,
+                                    getattr(
+                                        crawl_result, "error_message", "Unknown error"
+                                    ),
+                                )
+                            )
+                    else:
+                        raise Exception(
+                            f"Unexpected crawl result type: {type(crawl_result)} (deep_crawl={run_config.deep_crawl_strategy is not None})"
+                        )
+
+                except AttributeError as e:
+                    if "'int' object has no attribute 'raw_markdown'" in str(e):
+                        self.logger.error(
+                            "Critical: Integer markdown hash issue preventing crawl iteration"
+                        )
+                        raise Exception(
+                            "Crawl failed due to integer markdown hash issue in streaming mode"
+                        ) from e
+                    else:
+                        raise
 
             # Process results outside suppress_stdout context for debugging
             for result in successful_results:
-                self.logger.info(f"Processing successful result for {result.url}")
+                self.logger.info("Processing successful result for %s", result.url)
                 page_content = self._to_page_content(result)
                 self.logger.info(
-                    f"Created PageContent with {page_content.word_count} words for {result.url}"
+                    "Created PageContent with %s words for %s",
+                    page_content.word_count,
+                    result.url,
                 )
                 pages.append(page_content)
                 total_bytes += len(page_content.content)
@@ -218,7 +384,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     )
 
             self.logger.info(
-                f"Crawl loop completed: {crawl_count} results processed, {len(pages)} successful pages"
+                "Crawl loop completed: %s results processed, %s successful pages",
+                crawl_count,
+                len(pages),
             )
             end_time = time.time()
             crawl_duration = end_time - start_time
@@ -247,14 +415,17 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             )
 
             self.logger.info(
-                f"Web crawl completed: {len(pages)} pages, {crawl_duration:.1f}s, "
-                f"{pages_per_second:.1f} pages/sec, {len(errors)} errors"
+                "Web crawl completed: %s pages, %.1fs, %.1f pages/sec, %s errors",
+                len(pages),
+                crawl_duration,
+                pages_per_second,
+                len(errors),
             )
 
             return crawl_result
 
         except Exception as e:
-            self.logger.error(f"Web crawl failed: {e}", exc_info=True)
+            self.logger.error("Web crawl failed: %s", e, exc_info=True)
             urls = [request.url] if isinstance(request.url, str) else request.url
             return CrawlResult(
                 request_id=f"web_crawl_failed_{int(time.time())}",
@@ -272,7 +443,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     with suppress_stdout():
                         await browser.close()
                 except Exception as e:
-                    self.logger.warning(f"Error closing browser: {e}")
+                    self.logger.warning("Error closing browser: %s", e)
 
             await self.post_execute_cleanup()
 
@@ -298,15 +469,47 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             text = re.sub(r"\s+", " ", text).strip()
             return text
         except Exception as e:
-            self.logger.warning(f"Failed to extract text from HTML: {e}")
+            self.logger.warning("Failed to extract text from HTML: %s", e)
             return ""
+
+    def _sanitize_crawl_result(self, result: Crawl4aiResult) -> Crawl4aiResult:
+        """Sanitize CrawlResult to prevent integer hash issues with markdown field."""
+        import sys
+
+        from crawl4ai.models import MarkdownGenerationResult
+
+        # Check if the private _markdown field contains an integer hash
+        if hasattr(result, "_markdown") and isinstance(result._markdown, int):
+            print(
+                f"CRAWL DEBUG - Found integer _markdown ({result._markdown}), replacing with empty MarkdownGenerationResult",
+                file=sys.stderr,
+                flush=True,
+            )
+            # Replace the integer hash with an empty MarkdownGenerationResult
+            result._markdown = MarkdownGenerationResult(
+                raw_markdown="",
+                markdown_with_citations="",
+                references_markdown="",
+                fit_markdown=None,
+                fit_html=None,
+            )
+
+        return result
 
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
         import sys
 
         # STREAMING CRAWL FIX: During streaming, Crawl4AI returns lazy-loaded objects with hash placeholders
-        # We need to force actual content extraction from the result object
+        # Sanitize the result first to prevent integer hash issues
+        result = self._sanitize_crawl_result(result)
+
+        # Initial inspection of the markdown field
+        print(
+            f"CRAWL DEBUG - Inspecting result.markdown: type={type(result.markdown)}, value={result.markdown}",
+            file=sys.stderr,
+            flush=True,
+        )
 
         best_content = ""
 
@@ -329,31 +532,73 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 flush=True,
             )
 
-        # Strategy 2: Try accessing fit_markdown through different paths
+        # Strategy 2: Handle integer hash markdown (streaming mode issue)
+        if not best_content:
+            try:
+                # Check if markdown field contains an integer hash instead of MarkdownGenerationResult
+                if hasattr(result, "markdown") and result.markdown is not None:
+                    markdown_val = result.markdown
+
+                    # If markdown is an integer (hash), skip direct access and try other strategies
+                    if isinstance(markdown_val, int):
+                        print(
+                            f"CRAWL DEBUG - markdown is integer hash ({markdown_val}), skipping direct access",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    else:
+                        # Try to access the MarkdownGenerationResult attributes safely
+                        if hasattr(markdown_val, "fit_markdown"):
+                            fit_md = getattr(markdown_val, "fit_markdown", None)
+                            if fit_md and len(str(fit_md)) > 100:
+                                best_content = str(fit_md)
+                                print(
+                                    f"CRAWL DEBUG - Used fit_markdown: {len(best_content)} chars",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                        elif hasattr(markdown_val, "raw_markdown"):
+                            raw_md = getattr(markdown_val, "raw_markdown", None)
+                            if raw_md and len(str(raw_md)) > 100:
+                                best_content = str(raw_md)
+                                print(
+                                    f"CRAWL DEBUG - Used raw_markdown: {len(best_content)} chars",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+            except Exception as e:
+                print(
+                    f"CRAWL DEBUG - markdown access failed: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+        # Strategy 3: Try accessing fit_markdown through different paths (legacy)
         if not best_content:
             try:
                 # Check if markdown has a fit_markdown attribute that can be forced to load
                 if (
                     hasattr(result, "markdown")
                     and result.markdown
+                    and not isinstance(result.markdown, int)  # Skip if it's a hash
                     and hasattr(result.markdown, "fit_markdown")
                 ):
                     fit_md = result.markdown.fit_markdown
                     if fit_md and len(str(fit_md)) > 100:
                         best_content = str(fit_md)
                         print(
-                            f"CRAWL DEBUG - Used fit_markdown: {len(best_content)} chars",
+                            f"CRAWL DEBUG - Used legacy fit_markdown: {len(best_content)} chars",
                             file=sys.stderr,
                             flush=True,
                         )
             except Exception as e:
                 print(
-                    f"CRAWL DEBUG - fit_markdown access failed: {e}",
+                    f"CRAWL DEBUG - legacy fit_markdown access failed: {e}",
                     file=sys.stderr,
                     flush=True,
                 )
 
-        # Strategy 3: Try to get the underlying content data from the result
+        # Strategy 4: Try to get the underlying content data from the result
         if not best_content:
             try:
                 # Look for content in various result attributes that might hold actual data
@@ -384,7 +629,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     flush=True,
                 )
 
-        # Strategy 4: Extract from HTML as last resort
+        # Strategy 5: Extract from HTML as last resort
         if not best_content and result.html:
             try:
                 # Check if html is actually a hash or real content
@@ -528,9 +773,14 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
 
         # Base run config with fit markdown optimization
+        # NOTE: Deep crawl requires streaming mode (stream=True) to work properly
+        # The BFS strategy expects an async generator, not a list
+        stream_enabled = (
+            deep_strategy is not None
+        )  # Enable streaming only if deep crawl is used
         run_config = CrawlerRunConfig(
             deep_crawl_strategy=deep_strategy,
-            stream=True,  # CRITICAL: Enable streaming for multi-page deep crawling
+            stream=stream_enabled,  # Enable streaming when deep crawl is used
             cache_mode=cache_mode,
             page_timeout=page_timeout,
             remove_overlay_elements=getattr(settings, "crawl_remove_overlays", True),
@@ -604,6 +854,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         self, request: CrawlRequest, sitemap_seeds: list[str]
     ) -> BFSDeepCrawlStrategy | None:
         """Construct a Best-First deep crawl strategy with filters and scoring; fallback to BFS."""
+
         max_depth = request.max_depth or 1
         max_pages = request.max_pages or 100
 
@@ -684,15 +935,18 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     "started",
                 ]
             )
-            self.logger.info(f"Using keywords for scoring: {keywords[:10]}...")
+            self.logger.info("Using keywords for scoring: %s...", keywords[:10])
             KeywordRelevanceScorer(keywords=keywords, weight=0.7)  # type: ignore[attr-defined]
         except Exception as e:
-            self.logger.warning(f"Failed to create scorer: {e}")
+            self.logger.warning("Failed to create scorer: %s", e)
 
         # Use simple BFS strategy with comprehensive filtering
         try:
             self.logger.info(
-                f"Creating BFS deep crawl strategy: max_depth={max_depth}, max_pages={max_pages}, filter_chain={'present' if filter_chain else 'None'}"
+                "Creating BFS deep crawl strategy: max_depth=%s, max_pages=%s, filter_chain=%s",
+                max_depth,
+                max_pages,
+                "present" if filter_chain else "None",
             )
             # Disable filter_chain - any filtering prevents multi-page crawling
             return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
@@ -702,12 +956,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 # filter_chain=filter_chain,  # Disabled - even minimal filters break it
             )
         except Exception as e:
-            self.logger.warning(f"Failed to create BFS strategy: {e}")
+            self.logger.warning("Failed to create BFS strategy: %s", e)
             # Last resort: minimal BFS parameters
             try:
                 return BFSDeepCrawlStrategy(max_depth=max_depth, include_external=False)  # type: ignore[attr-defined]
             except Exception as e2:
-                self.logger.error(f"Failed to create minimal BFS strategy: {e2}")
+                self.logger.error("Failed to create minimal BFS strategy: %s", e2)
                 return None
 
     async def _discover_sitemap_seeds(self, start_url: str, limit: int) -> list[str]:

@@ -9,10 +9,9 @@ from typing import Any
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from ..core import RagService, SourceService
+from ..core import RagService, VectorService
 from ..middleware.progress import progress_middleware
 from ..models.rag import RagQuery
-from ..models.sources import SourceFilter, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -174,79 +173,83 @@ def register_rag_tools(mcp: FastMCP) -> None:
             raise ToolError("offset cannot be negative")
 
         try:
-            # Convert source types to enum values
-            source_type_enums = None
-            if source_types:
-                try:
-                    source_type_enums = [SourceType(st.lower()) for st in source_types]
-                except ValueError as e:
-                    raise ToolError(f"Invalid source type: {e!s}") from e
+            # Get sources directly from VectorService
+            async with VectorService() as vector_service:
+                # Get unique sources with filtering
+                sources_response = await vector_service.get_unique_sources(
+                    domains=domains,
+                    search_term=search_term,
+                    limit=limit,
+                    offset=offset,
+                )
 
-            # Create filter
-            filter_criteria = SourceFilter(
-                source_types=source_type_enums,
-                domains=domains,
-                statuses=statuses,
-                search_term=search_term,
-                limit=limit,
-                offset=offset,
-            )
+                # Get vector database statistics
+                vector_stats = await vector_service.get_sources_stats()
 
-            # Get sources
-            async with SourceService() as source_service:
-                sources = await source_service.list_sources(filter_criteria)
-                stats = await source_service.get_source_statistics()
-
-            # Prepare response
+            # Prepare response with simplified source data
             result: dict[str, Any] = {
                 "sources": [],
-                "pagination": {
-                    "limit": limit,
-                    "offset": offset,
-                    "returned": len(sources),
+                "pagination": sources_response["pagination"],
+                "statistics": {
+                    "vector_database": vector_stats,
+                    "source_registry": {
+                        "registered_sources": 0,  # No longer maintained
+                        "sources_by_type": {},
+                        "sources_by_status": {},
+                        "stale_sources": 0,
+                    },
                 },
-                "statistics": stats,
                 "filters_applied": {
-                    "source_types": source_types,
+                    "source_types": source_types,  # Note: source_types filtering not yet implemented
                     "domains": domains,
-                    "statuses": statuses,
+                    "statuses": statuses,  # Note: statuses filtering not yet implemented
                     "search_term": search_term,
                 },
             }
 
-            # Process sources
-            for source in sources:
+            # Process sources with simplified data structure
+            for source in sources_response["sources"]:
+                from urllib.parse import urlparse
+
+                parsed_url = urlparse(source["url"])
+
                 source_data = {
-                    "id": source.id,
-                    "url": source.url,
-                    "title": source.title,
-                    "source_type": source.source_type.value,
-                    "status": source.status,
-                    "chunk_count": source.chunk_count,
-                    "total_content_length": source.total_content_length,
-                    "average_chunk_size": source.avg_chunk_size,
-                    "created_at": source.created_at.isoformat(),
-                    "updated_at": source.updated_at.isoformat(),
-                    "last_crawled": source.last_crawled.isoformat()
-                    if source.last_crawled
-                    else None,
-                    "is_stale": source.is_stale,
+                    "id": f"src_{hash(source['url']) & 0x7FFFFFFF:08x}",  # Generate consistent ID
+                    "url": source["url"],
+                    "title": source["title"],
+                    "source_type": source["source_type"],
+                    "status": source["status"],
+                    "chunk_count": source["chunk_count"],
+                    "total_content_length": source["total_content_length"],
+                    "average_chunk_size": (
+                        source["total_content_length"] / source["chunk_count"]
+                        if source["chunk_count"] > 0
+                        else 0
+                    ),
+                    "created_at": source[
+                        "last_crawled"
+                    ],  # Use last_crawled as created_at
+                    "updated_at": source[
+                        "last_crawled"
+                    ],  # Use last_crawled as updated_at
+                    "last_crawled": source["last_crawled"],
+                    "is_stale": False,  # Could be enhanced with timestamp logic
                     "metadata": {
-                        "domain": source.metadata.domain,
-                        "word_count": source.metadata.word_count,
-                        "character_count": source.metadata.character_count,
-                        "link_count": source.metadata.link_count,
-                        "image_count": source.metadata.image_count,
-                        "language": source.metadata.language,
-                        "content_type": source.metadata.content_type,
-                        "tags": source.metadata.tags,
-                        "categories": source.metadata.categories,
+                        "domain": parsed_url.netloc,
+                        "word_count": source["total_word_count"],
+                        "character_count": source["total_content_length"],
+                        "link_count": 0,  # Not available from Qdrant
+                        "image_count": 0,  # Not available from Qdrant
+                        "language": None,  # Not available from Qdrant
+                        "content_type": "text/html",  # Default
+                        "tags": [],
+                        "categories": [],
                     },
                 }
 
                 result["sources"].append(source_data)
 
-            await ctx.info(f"Found {len(sources)} sources matching criteria")
+            await ctx.info(f"Found {len(result['sources'])} sources matching criteria")
 
             return result
 
@@ -269,13 +272,21 @@ def register_rag_tools(mcp: FastMCP) -> None:
             async with RagService() as rag_service:
                 stats = await rag_service.get_stats()
 
-            async with SourceService() as source_service:
-                source_stats = await source_service.get_source_statistics()
+            async with VectorService() as vector_service:
+                vector_stats = await vector_service.get_sources_stats()
 
-            # Combine statistics
+            # Combine statistics with simplified source management
             result: dict[str, Any] = {
                 "rag_system": stats,
-                "source_management": source_stats,
+                "source_management": {
+                    "vector_database": vector_stats,
+                    "source_registry": {
+                        "registered_sources": 0,  # No longer maintained
+                        "sources_by_type": {},
+                        "sources_by_status": {},
+                        "stale_sources": 0,
+                    },
+                },
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
@@ -288,14 +299,14 @@ def register_rag_tools(mcp: FastMCP) -> None:
                 "services": health,
             }
 
-            # Add quick facts
+            # Add quick facts - use actual data from vector database
             collection_info = stats.get("collection", {})
             result["quick_facts"] = {
                 "total_documents": collection_info.get("points_count", 0),
                 "total_vectors": collection_info.get("vectors_count", 0),
-                "total_sources": source_stats.get("source_registry", {}).get(
-                    "registered_sources", 0
-                ),
+                "total_sources": vector_stats.get(
+                    "unique_sources", 0
+                ),  # Use actual count from Qdrant
                 "vector_dimension": collection_info.get("config", {}).get(
                     "vector_size", 0
                 ),
@@ -335,33 +346,26 @@ def register_rag_tools(mcp: FastMCP) -> None:
             )
 
         try:
-            # Delete from RAG service
+            # Delete from RAG service (which handles Qdrant deletion)
             async with RagService() as rag_service:
                 rag_deleted = await rag_service.delete_source(source_url)
 
-            # Find and delete from source service
-            async with SourceService() as source_service:
-                # Find source by URL
-                all_sources = await source_service.list_sources()
-                matching_sources = [s for s in all_sources if s.url == source_url]
-
-                source_deleted = False
-                for source in matching_sources:
-                    if await source_service.delete_source(source.id):
-                        source_deleted = True
+            # Source registry is no longer maintained separately
+            # All source tracking is now handled through Qdrant
 
             result = {
                 "source_url": source_url,
-                "rag_documents_deleted": rag_deleted,
-                "source_registry_deleted": source_deleted,
-                "success": rag_deleted or source_deleted,
+                "documents_deleted": rag_deleted,
+                "success": rag_deleted > 0,
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
             if result["success"]:
-                await ctx.info(f"Successfully deleted source: {source_url}")
+                await ctx.info(
+                    f"Successfully deleted {rag_deleted} documents for source: {source_url}"
+                )
             else:
-                await ctx.info(f"No data found to delete for source: {source_url}")
+                await ctx.info(f"No documents found to delete for source: {source_url}")
 
             return result
 

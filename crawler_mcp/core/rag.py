@@ -696,7 +696,6 @@ class RagService:
 
                 # Check if we should skip this chunk (unchanged content)
                 should_skip = False
-                is_update = False
                 legacy_chunk_to_replace = None
 
                 if deduplication and not force_update:
@@ -735,7 +734,6 @@ class RagService:
                 if deduplication:
                     if chunk_id in existing_chunks_map:
                         chunks_updated += 1
-                        is_update = True
                         logger.debug(
                             f"Updating changed chunk {chunk_id} for {page.url}"
                         )
@@ -746,7 +744,6 @@ class RagService:
                     ):
                         # This will replace a legacy chunk
                         chunks_updated += 1
-                        is_update = True
                         legacy_chunks_to_delete.append(legacy_chunk_to_replace["id"])
                         logger.debug(
                             f"Upgrading legacy chunk {legacy_chunk_to_replace['id']} to deterministic ID {chunk_id}"
@@ -761,7 +758,6 @@ class RagService:
                             and legacy_chunk.get("content_hash") != content_hash
                         ):
                             chunks_updated += 1
-                            is_update = True
                             legacy_chunk_to_replace = legacy_chunk
                             legacy_chunks_to_delete.append(legacy_chunk["id"])
                             logger.debug(

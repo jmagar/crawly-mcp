@@ -508,12 +508,13 @@ class VectorService:
 
             chunks = []
             for point in response[0]:  # response is (points, next_offset)
+                payload = point.payload or {}
                 chunk_data = {
                     "id": point.id,
-                    "content": point.payload.get("content", ""),
-                    "content_hash": point.payload.get("content_hash"),
-                    "chunk_index": point.payload.get("chunk_index", 0),
-                    "metadata": point.payload.get("metadata", {}),
+                    "content": payload.get("content", ""),
+                    "content_hash": payload.get("content_hash"),
+                    "chunk_index": payload.get("chunk_index", 0),
+                    "metadata": payload.get("metadata", {}),
                 }
                 chunks.append(chunk_data)
 
@@ -626,3 +627,149 @@ class VectorService:
         except Exception as e:
             logger.error(f"Error getting source statistics: {e}")
             return {}
+
+    async def get_unique_sources(
+        self,
+        domains: list[str] | None = None,
+        search_term: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Get unique sources from the vector database with filtering and pagination.
+
+        Args:
+            domains: Filter by domains (e.g., ["github.com", "example.com"])
+            search_term: Search term to filter titles and URLs
+            limit: Maximum number of sources to return
+            offset: Offset for pagination
+
+        Returns:
+            Dictionary with sources and metadata
+        """
+        await self.ensure_collection()
+
+        try:
+            # Collect source information
+            sources_data: dict[str, dict[str, Any]] = {}
+            total_sources = 0
+
+            # Scroll through all points to collect source information
+            scroll_offset = None
+            scroll_limit = 1000
+
+            while True:
+                result = await self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=scroll_limit,
+                    offset=scroll_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                points = result[0]
+                next_offset = result[1]
+
+                if not points:
+                    break
+
+                for point in points:
+                    payload = getattr(point, "payload", None)
+                    if payload is None:
+                        continue
+
+                    source_url = payload.get("source_url", "")
+                    source_title = payload.get("source_title", "")
+                    char_count = payload.get("char_count", 0)
+                    word_count = payload.get("word_count", 0)
+                    timestamp = payload.get("timestamp", "")
+
+                    if not source_url:
+                        continue
+
+                    # Apply domain filtering
+                    if domains:
+                        from urllib.parse import urlparse
+
+                        parsed_url = urlparse(source_url)
+                        if parsed_url.netloc not in domains:
+                            continue
+
+                    # Apply search term filtering
+                    if search_term:
+                        search_lower = search_term.lower()
+                        if (
+                            search_lower not in source_url.lower()
+                            and search_lower not in (source_title or "").lower()
+                        ):
+                            continue
+
+                    # Aggregate source data
+                    if source_url not in sources_data:
+                        sources_data[source_url] = {
+                            "url": source_url,
+                            "title": source_title,
+                            "chunk_count": 0,
+                            "total_content_length": 0,
+                            "total_word_count": 0,
+                            "last_crawled": timestamp,
+                            "source_type": "webpage",  # Default, could be enhanced
+                            "status": "active",
+                        }
+
+                    # Update aggregated stats
+                    source_data = sources_data[source_url]
+                    source_data["chunk_count"] += 1
+                    source_data["total_content_length"] += char_count
+                    source_data["total_word_count"] += word_count
+
+                    # Keep the most recent timestamp
+                    if timestamp and (
+                        not source_data["last_crawled"]
+                        or timestamp > source_data["last_crawled"]
+                    ):
+                        source_data["last_crawled"] = timestamp
+
+                if next_offset is None:
+                    break
+                scroll_offset = next_offset
+
+            # Convert to list and apply pagination
+            all_sources = list(sources_data.values())
+            total_sources = len(all_sources)
+
+            # Sort by URL for consistent ordering
+            all_sources.sort(key=lambda x: x["url"])
+
+            # Apply pagination
+            start_idx = offset
+            end_idx = offset + limit
+            paginated_sources = all_sources[start_idx:end_idx]
+
+            return {
+                "sources": paginated_sources,
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "total": total_sources,
+                    "returned": len(paginated_sources),
+                },
+                "filters_applied": {
+                    "domains": domains,
+                    "search_term": search_term,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting unique sources: {e}")
+            return {
+                "sources": [],
+                "pagination": {
+                    "limit": limit,
+                    "offset": offset,
+                    "total": 0,
+                    "returned": 0,
+                },
+                "filters_applied": {"domains": domains, "search_term": search_term},
+                "error": str(e),
+            }

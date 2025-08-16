@@ -9,7 +9,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
 from ..config import settings
-from ..core import CrawlerService, RagService, SourceService
+from ..core import CrawlerService, RagService
 from ..middleware.progress import progress_middleware
 from ..models.crawl import CrawlRequest, CrawlResult, CrawlStatus
 from ..models.sources import SourceType
@@ -91,12 +91,9 @@ async def _process_rag_if_requested(
                 )
                 rag_info["rag_processing"] = rag_stats
 
-            # Register sources
-            async with SourceService() as source_service:
-                sources = await source_service.register_crawl_result(
-                    crawl_result, source_type
-                )
-                rag_info["sources_registered"] = len(sources)
+            # Source registration is now handled automatically through RAG processing
+            # Sources are tracked in Qdrant when documents are added
+            rag_info["sources_registered"] = len(crawl_result.pages)
 
             await ctx.info(
                 f"RAG processing completed: {rag_stats.get('chunks_created', 0)} chunks, "

@@ -75,6 +75,7 @@ target-version = "py311"
 line-length = 88
 fix = true
 show-fixes = true
+cache-dir = ".cache/ruff"
 
 [tool.ruff.lint]
 select = [
@@ -106,6 +107,10 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+cache_dir = ".cache/mypy"
+
+[tool.pytest.ini_options]
+cache_dir = ".cache/pytest"
 
 [dependency-groups]
 dev = [

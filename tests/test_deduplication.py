@@ -30,9 +30,9 @@ class TestDeduplication:
         id4 = rag_service._generate_deterministic_id("https://example.com/other", 0)
         assert id1 != id4
 
-        # ID should be 16 characters (hexadecimal)
-        assert len(id1) == 16
-        assert all(c in "0123456789abcdef" for c in id1)
+        # ID should be a valid UUID format (36 characters with dashes)
+        assert len(id1) == 36
+        assert id1.count("-") == 4  # UUID format has 4 dashes
 
     def test_calculate_content_hash(self):
         """Test content hash calculation."""

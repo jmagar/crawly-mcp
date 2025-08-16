@@ -263,7 +263,7 @@ class TestDeduplicationPerformance:
         # Test ID generation performance
         start_time = time.time()
         ids = []
-        for i, url in enumerate(urls):
+        for _i, url in enumerate(urls):
             chunk_id = rag_service._generate_deterministic_id(url, 0)
             ids.append(chunk_id)
         id_generation_time = time.time() - start_time

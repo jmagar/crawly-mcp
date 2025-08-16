@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
-def suppress_stdout():
+def suppress_stdout() -> Any:
     """Context manager to suppress stdout output (redirect to devnull)."""
     old_stdout = sys.stdout
     try:

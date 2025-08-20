@@ -16,6 +16,11 @@ warnings.filterwarnings(
     message="Support for class-based.*config.*is deprecated.*",
     category=DeprecationWarning,
 )
+warnings.filterwarnings(
+    "ignore",
+    message="The 'text' argument to find\\(\\)-type methods is deprecated.*",
+    category=DeprecationWarning,
+)
 
 import asyncio  # noqa: E402
 import logging  # noqa: E402

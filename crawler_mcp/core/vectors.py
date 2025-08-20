@@ -15,6 +15,7 @@ from qdrant_client.models import (
     MatchAny,
     MatchValue,
     PointStruct,
+    SearchParams,
     UpdateStatus,
     VectorParams,
 )
@@ -345,9 +346,9 @@ class VectorService:
                 query_filter=search_filter,
                 with_payload=True,
                 with_vectors=False,  # Don't return vectors to save bandwidth
-                search_params={
-                    "hnsw": {"ef": ef_value}
-                },  # Dynamic ef for optimal speed/accuracy
+                search_params=SearchParams(
+                    hnsw_ef=ef_value
+                ),  # Dynamic ef for optimal speed/accuracy
             )
 
             # Extract results - handle different return types from query_points

@@ -783,107 +783,130 @@ class RagService:
                         f"Processing page {i + 1}/{total_pages}: {page.url}",
                     )
 
-                chunk_metadata = page.metadata.get("chunk_metadata", {})
-                chunk_index = chunk_metadata.get("chunk_index", i)
+                # Split page content into optimal chunks for Qwen3-Embedding-0.6B
+                text_chunks = self._chunk_text_character_based(
+                    page.content,
+                    metadata={
+                        "source_url": page.url,
+                        "source_title": page.title,
+                        "page_index": i,
+                        **page.metadata.get("chunk_metadata", {}),
+                    },
+                )
 
-                # Generate deterministic ID if deduplication is enabled
-                if deduplication:
-                    chunk_id = self._generate_deterministic_id(page.url, chunk_index)
-                    content_hash = self._calculate_content_hash(page.content)
-                else:
-                    # Fallback to random UUID for backwards compatibility
-                    chunk_id = f"{uuid.uuid4()}"
-                    content_hash = None
+                # Process each text chunk as a separate document
+                for sub_chunk_idx, chunk_data in enumerate(text_chunks):
+                    # Generate composite chunk index for deterministic ID
+                    composite_chunk_index = f"{i}_{sub_chunk_idx}"
 
-                # Check if we should skip this chunk (unchanged content)
-                should_skip = False
-                legacy_chunk_to_replace = None
-
-                if deduplication and not force_update:
-                    # Check deterministic ID first (normal case)
-                    if (
-                        chunk_id in existing_chunks_map
-                        and existing_chunks_map[chunk_id] == content_hash
-                    ):
-                        chunks_skipped += 1
-                        logger.debug(
-                            f"Skipping unchanged chunk {chunk_id} for {page.url}"
+                    # Generate deterministic ID if deduplication is enabled
+                    if deduplication:
+                        chunk_id = self._generate_deterministic_id(
+                            page.url, composite_chunk_index
                         )
-                        should_skip = True
+                        content_hash = self._calculate_content_hash(chunk_data["text"])
+                    else:
+                        # Fallback to random UUID for backwards compatibility
+                        chunk_id = f"{uuid.uuid4()}"
+                        content_hash = None
 
-                    # Backwards compatibility: check for legacy chunks with same content
-                    elif use_backwards_compatibility and existing_chunks_list:
-                        legacy_chunk = self._find_legacy_chunk_by_content(
-                            existing_chunks_list, page.content
-                        )
-                        if legacy_chunk:
-                            legacy_chunk_hash = legacy_chunk.get("content_hash", "")
-                            if legacy_chunk_hash == content_hash:
-                                # Same content, different ID format - skip but note the legacy chunk for replacement
-                                chunks_skipped += 1
+                    # Check if we should skip this chunk (unchanged content)
+                    should_skip = False
+                    legacy_chunk_to_replace = None
+
+                    if deduplication and not force_update:
+                        # Check deterministic ID first (normal case)
+                        if (
+                            chunk_id in existing_chunks_map
+                            and existing_chunks_map[chunk_id] == content_hash
+                        ):
+                            chunks_skipped += 1
+                            logger.debug(
+                                f"Skipping unchanged chunk {chunk_id} for {page.url}"
+                            )
+                            should_skip = True
+
+                        # Backwards compatibility: check for legacy chunks with same content
+                        elif use_backwards_compatibility and existing_chunks_list:
+                            legacy_chunk = self._find_legacy_chunk_by_content(
+                                existing_chunks_list, chunk_data["text"]
+                            )
+                            if legacy_chunk:
+                                legacy_chunk_hash = legacy_chunk.get("content_hash", "")
+                                if legacy_chunk_hash == content_hash:
+                                    # Same content, different ID format - skip but note the legacy chunk for replacement
+                                    chunks_skipped += 1
+                                    legacy_chunk_to_replace = legacy_chunk
+                                    legacy_chunks_to_delete.append(legacy_chunk["id"])
+                                    logger.debug(
+                                        f"Skipping unchanged content, will replace legacy chunk {legacy_chunk['id']} with deterministic ID {chunk_id}"
+                                    )
+                                    should_skip = True
+
+                    if should_skip:
+                        continue
+
+                    # Determine if this is an update
+                    if deduplication:
+                        if chunk_id in existing_chunks_map:
+                            chunks_updated += 1
+                            logger.debug(
+                                f"Updating changed chunk {chunk_id} for {page.url}"
+                            )
+                        elif (
+                            use_backwards_compatibility
+                            and existing_chunks_list
+                            and legacy_chunk_to_replace
+                        ):
+                            # This will replace a legacy chunk
+                            chunks_updated += 1
+                            legacy_chunks_to_delete.append(
+                                legacy_chunk_to_replace["id"]
+                            )
+                            logger.debug(
+                                f"Upgrading legacy chunk {legacy_chunk_to_replace['id']} to deterministic ID {chunk_id}"
+                            )
+                        elif use_backwards_compatibility and existing_chunks_list:
+                            # Check if there's a legacy chunk with different content that should be updated
+                            legacy_chunk = self._find_legacy_chunk_by_content(
+                                existing_chunks_list, chunk_data["text"]
+                            )
+                            if (
+                                legacy_chunk
+                                and legacy_chunk.get("content_hash") != content_hash
+                            ):
+                                chunks_updated += 1
                                 legacy_chunk_to_replace = legacy_chunk
                                 legacy_chunks_to_delete.append(legacy_chunk["id"])
                                 logger.debug(
-                                    f"Skipping unchanged content, will replace legacy chunk {legacy_chunk['id']} with deterministic ID {chunk_id}"
+                                    f"Updating and upgrading legacy chunk {legacy_chunk['id']} to {chunk_id}"
                                 )
-                                should_skip = True
 
-                if should_skip:
-                    continue
-
-                # Determine if this is an update
-                if deduplication:
-                    if chunk_id in existing_chunks_map:
-                        chunks_updated += 1
-                        logger.debug(
-                            f"Updating changed chunk {chunk_id} for {page.url}"
-                        )
-                    elif (
-                        use_backwards_compatibility
-                        and existing_chunks_list
-                        and legacy_chunk_to_replace
-                    ):
-                        # This will replace a legacy chunk
-                        chunks_updated += 1
-                        legacy_chunks_to_delete.append(legacy_chunk_to_replace["id"])
-                        logger.debug(
-                            f"Upgrading legacy chunk {legacy_chunk_to_replace['id']} to deterministic ID {chunk_id}"
-                        )
-                    elif use_backwards_compatibility and existing_chunks_list:
-                        # Check if there's a legacy chunk with different content that should be updated
-                        legacy_chunk = self._find_legacy_chunk_by_content(
-                            existing_chunks_list, page.content
-                        )
-                        if (
-                            legacy_chunk
-                            and legacy_chunk.get("content_hash") != content_hash
-                        ):
-                            chunks_updated += 1
-                            legacy_chunk_to_replace = legacy_chunk
-                            legacy_chunks_to_delete.append(legacy_chunk["id"])
-                            logger.debug(
-                                f"Updating and upgrading legacy chunk {legacy_chunk['id']} to {chunk_id}"
-                            )
-
-                # Create document chunk with deduplication fields
-                now = datetime.utcnow()
-                doc_chunk = DocumentChunk(
-                    id=chunk_id,
-                    content=page.content,
-                    source_url=page.url,
-                    source_title=page.title,
-                    chunk_index=chunk_index,
-                    word_count=page.word_count,
-                    char_count=len(page.content),
-                    metadata=page.metadata,
-                    content_hash=content_hash,
-                    # For new chunks, first_seen will be set by default_factory
-                    # For existing chunks, we should preserve the original first_seen,
-                    # but since we don't have that info in the test, let default_factory handle it
-                    last_modified=now,  # Always set last_modified to current time
-                )
-                document_chunks.append(doc_chunk)
-                total_chunks += 1
+                    # Create document chunk with deduplication fields
+                    now = datetime.utcnow()
+                    doc_chunk = DocumentChunk(
+                        id=chunk_id,
+                        content=chunk_data["text"],
+                        source_url=page.url,
+                        source_title=page.title,
+                        chunk_index=chunk_data["chunk_index"],
+                        word_count=chunk_data["word_count"],
+                        char_count=chunk_data["char_count"],
+                        metadata={
+                            **page.metadata,
+                            "sub_chunk_index": sub_chunk_idx,
+                            "page_index": i,
+                            "start_pos": chunk_data["start_pos"],
+                            "end_pos": chunk_data["end_pos"],
+                        },
+                        content_hash=content_hash,
+                        # For new chunks, first_seen will be set by default_factory
+                        # For existing chunks, we should preserve the original first_seen,
+                        # but since we don't have that info in the test, let default_factory handle it
+                        last_modified=now,  # Always set last_modified to current time
+                    )
+                    document_chunks.append(doc_chunk)
+                    total_chunks += 1
 
             except Exception as e:
                 logger.error(f"Error processing page {page.url}: {e}")

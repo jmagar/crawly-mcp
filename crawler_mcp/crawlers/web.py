@@ -31,7 +31,6 @@ from crawl4ai.extraction_strategy import (  # type: ignore
 )
 
 from ..config import settings
-from ..core.memory import MemoryManager, get_memory_manager
 from ..models.crawl import (
     CrawlRequest,
     CrawlResult,
@@ -66,11 +65,13 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def __init__(self) -> None:
         super().__init__()
-        self.memory_manager: MemoryManager | None = None
+        self.memory_manager = None
 
     async def _initialize_managers(self) -> None:
         """Initialize required managers."""
         if not self.memory_manager:
+            from ..core.memory import get_memory_manager
+
             self.memory_manager = get_memory_manager()
 
     async def validate_request(self, request: CrawlRequest) -> bool:
@@ -543,22 +544,62 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         return result
 
     def _safe_get_markdown(self, result: Crawl4aiResult) -> str:
-        """Safely get markdown content from result, handling integer hash issues."""
+        """Safely extract markdown content from crawl4ai result.
+
+        Based on crawl4ai documentation, result.markdown is a MarkdownGenerationResult object
+        with attributes like raw_markdown and fit_markdown. We should access these directly.
+
+        However, crawl4ai sometimes returns integer hash IDs instead of proper objects,
+        so we need to handle that case as well.
+        """
+        if not result.markdown:
+            return ""
+
         try:
-            # Try to access markdown property
-            markdown = result.markdown
-            if isinstance(markdown, str):
-                return markdown
-            elif hasattr(markdown, "raw_markdown"):
-                return markdown.raw_markdown
-            else:
-                return str(markdown) if markdown else ""
-        except AttributeError as e:
-            if "'int' object has no attribute" in str(e):
-                # Return empty string if we hit the integer hash issue
+            # Check if result.markdown is an integer (hash ID issue)
+            if isinstance(result.markdown, int):
+                print(
+                    f"CRAWL DEBUG - result.markdown is integer {result.markdown}, returning empty",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return ""
-            else:
-                raise
+
+            # First try fit_markdown (filtered content) if available
+            if (
+                hasattr(result.markdown, "fit_markdown")
+                and result.markdown.fit_markdown
+            ):
+                content = result.markdown.fit_markdown
+                if (
+                    isinstance(content, str) and len(content) > 16
+                ):  # Avoid hash placeholders
+                    return content
+
+            # Fall back to raw_markdown (full content)
+            if (
+                hasattr(result.markdown, "raw_markdown")
+                and result.markdown.raw_markdown
+            ):
+                content = result.markdown.raw_markdown
+                if (
+                    isinstance(content, str) and len(content) > 16
+                ):  # Avoid hash placeholders
+                    return content
+
+            # If neither is available or they're just hash placeholders, return empty string
+            return ""
+
+        except (AttributeError, TypeError) as e:
+            print(
+                f"CRAWL DEBUG - Exception accessing markdown attributes: {e}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return ""
+        except Exception as e:
+            self.logger.warning(f"Failed to extract markdown content: {e}")
+            return ""
 
     def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
@@ -568,207 +609,8 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Sanitize the result first to prevent integer hash issues
         result = self._sanitize_crawl_result(result)
 
-        # Initial inspection of the markdown field - SAFE ACCESS
-        try:
-            # Only access markdown if it's safe
-            if hasattr(result, "_markdown") and not isinstance(
-                getattr(result, "_markdown", None), int
-            ):
-                print(
-                    f"CRAWL DEBUG - Markdown field is safe to access for {result.url}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            else:
-                print(
-                    f"CRAWL DEBUG - Markdown field contains integer hash for {result.url}, skipping access",
-                    file=sys.stderr,
-                    flush=True,
-                )
-        except Exception as e:
-            print(
-                f"CRAWL DEBUG - Cannot inspect markdown for {result.url}: {e}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-        best_content = ""
-
-        # Strategy 1: Try to force content extraction by calling str() on the result itself
-        # This might trigger lazy loading
-        try:
-            if hasattr(result, "__str__"):
-                result_str = str(result)
-                if result_str and len(result_str) > 100:  # Reasonable content length
-                    best_content = result_str
-                    print(
-                        f"CRAWL DEBUG - Used result.__str__(): {len(best_content)} chars",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-        except Exception as e:
-            print(
-                f"CRAWL DEBUG - result.__str__() failed: {e}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-        # Strategy 2: Handle integer hash markdown (streaming mode issue)
-        if not best_content:
-            try:
-                # Check if markdown field contains an integer hash instead of MarkdownGenerationResult
-                if hasattr(result, "markdown") and result.markdown is not None:
-                    markdown_val = result.markdown
-
-                    # If markdown is an integer (hash), skip direct access and try other strategies
-                    if isinstance(markdown_val, int):
-                        print(
-                            f"CRAWL DEBUG - markdown is integer hash ({markdown_val}), skipping direct access",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                    else:
-                        # Try to access the MarkdownGenerationResult attributes safely
-                        if hasattr(markdown_val, "fit_markdown"):
-                            fit_md = getattr(markdown_val, "fit_markdown", None)
-                            if fit_md and len(str(fit_md)) > 100:
-                                best_content = str(fit_md)
-                                print(
-                                    f"CRAWL DEBUG - Used fit_markdown: {len(best_content)} chars",
-                                    file=sys.stderr,
-                                    flush=True,
-                                )
-                        elif hasattr(markdown_val, "raw_markdown"):
-                            raw_md = getattr(markdown_val, "raw_markdown", None)
-                            if raw_md and len(str(raw_md)) > 100:
-                                best_content = str(raw_md)
-                                print(
-                                    f"CRAWL DEBUG - Used raw_markdown: {len(best_content)} chars",
-                                    file=sys.stderr,
-                                    flush=True,
-                                )
-            except Exception as e:
-                print(
-                    f"CRAWL DEBUG - markdown access failed: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-        # Strategy 3: Try accessing fit_markdown through different paths (legacy)
-        if not best_content:
-            try:
-                # Check if markdown has a fit_markdown attribute that can be forced to load
-                if (
-                    hasattr(result, "markdown")
-                    and result.markdown
-                    and not isinstance(result.markdown, int)  # Skip if it's a hash
-                    and hasattr(result.markdown, "fit_markdown")
-                ):
-                    fit_md = result.markdown.fit_markdown
-                    if fit_md and len(str(fit_md)) > 100:
-                        best_content = str(fit_md)
-                        print(
-                            f"CRAWL DEBUG - Used legacy fit_markdown: {len(best_content)} chars",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-            except Exception as e:
-                print(
-                    f"CRAWL DEBUG - legacy fit_markdown access failed: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-        # Strategy 4: Try to get the underlying content data from the result
-        if not best_content:
-            try:
-                # Look for content in various result attributes that might hold actual data
-                content_attrs = [
-                    "content",
-                    "text",
-                    "body",
-                    "data",
-                    "_content",
-                    "_text",
-                    "_data",
-                ]
-                for attr in content_attrs:
-                    if hasattr(result, attr):
-                        val = getattr(result, attr)
-                        if val and len(str(val)) > 100:
-                            best_content = str(val)
-                            print(
-                                f"CRAWL DEBUG - Used result.{attr}: {len(best_content)} chars",
-                                file=sys.stderr,
-                                flush=True,
-                            )
-                            break
-            except Exception as e:
-                print(
-                    f"CRAWL DEBUG - content attribute access failed: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-        # Strategy 5: Extract from HTML as last resort
-        if not best_content and result.html:
-            try:
-                # Check if html is actually a hash or real content
-                html_str = str(result.html)
-                if len(html_str) > 100:  # Real HTML content
-                    best_content = self._extract_text_from_html(html_str)
-                    print(
-                        f"CRAWL DEBUG - Used HTML extraction: {len(best_content)} chars",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"CRAWL DEBUG - HTML is only {len(html_str)} chars (likely hash)",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-            except Exception as e:
-                print(
-                    f"CRAWL DEBUG - HTML extraction failed: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-        # Strategy 5: Try to force evaluation of lazy-loaded objects
-        if not best_content:
-            try:
-                # For StringCompatibleMarkdown objects, try different access patterns
-                if hasattr(result, "markdown") and result.markdown:
-                    markdown_obj = result.markdown
-
-                    # Try calling methods that might force content loading
-                    force_methods = ["__call__", "get", "load", "evaluate", "resolve"]
-                    for method_name in force_methods:
-                        if hasattr(markdown_obj, method_name):
-                            try:
-                                method = getattr(markdown_obj, method_name)
-                                if callable(method):
-                                    forced_content = method()
-                                    if (
-                                        forced_content
-                                        and len(str(forced_content)) > 100
-                                    ):
-                                        best_content = str(forced_content)
-                                        print(
-                                            f"CRAWL DEBUG - Used {method_name}(): {len(best_content)} chars",
-                                            file=sys.stderr,
-                                            flush=True,
-                                        )
-                                        break
-                            except Exception:
-                                continue
-            except Exception as e:
-                print(
-                    f"CRAWL DEBUG - Force loading failed: {e}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+        # Extract content using the _safe_get_markdown method which follows reference code pattern
+        best_content = self._safe_get_markdown(result)
 
         # Calculate word count
         word_count = len(best_content.split()) if best_content.strip() else 0
@@ -781,23 +623,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )
         print(debug_msg, file=sys.stderr, flush=True)
 
-        # Legacy fit_markdown extraction for metadata
-        import contextlib
-
-        fit_markdown = None
-        with contextlib.suppress(Exception):
-            fit_markdown = (
-                getattr(result.markdown, "fit_markdown", None)
-                if hasattr(result, "markdown")
-                else None
-            )
-
         return PageContent(
             url=result.url,
             title=result.metadata.get("title", ""),
             content=best_content,
             html=result.html,
-            markdown=fit_markdown or self._safe_get_markdown(result),
+            markdown=best_content,  # Use the validated content as markdown
             word_count=word_count,
             links=[
                 link.get("href", link) if isinstance(link, dict) else link
@@ -816,7 +647,6 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 "status_code": result.status_code,
                 "response_headers": dict(result.response_headers or {}),
                 "chunk_metadata": getattr(result, "chunk_metadata", {}),
-                "has_fit_markdown": fit_markdown is not None,
             },
             timestamp=datetime.fromtimestamp(time.time()),
         )
@@ -840,14 +670,18 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else int(timeout_val)
         )
 
-        # Deep crawl strategy (BestFirst preferred, BFS fallback)
-        deep_strategy = self._build_deep_crawl_strategy(request, sitemap_seeds or [])
+        # Deep crawl strategy (only for multi-page crawls)
+        deep_strategy = None
+        if (request.max_pages or 1) > 1 and (request.max_depth or 1) > 1:
+            deep_strategy = self._build_deep_crawl_strategy(
+                request, sitemap_seeds or []
+            )
 
-        # Create content filter for fit markdown generation - align with working scrape settings
+        # Create content filter for fit markdown generation - optimized for clean content
         content_filter = PruningContentFilter(
-            threshold=0.45,  # Prune nodes below 45% relevance score
+            threshold=0.48,  # Prune nodes below 48% relevance score for better quality
             threshold_type="dynamic",  # Dynamic scoring
-            min_word_threshold=5,  # Ignore very short text blocks
+            min_word_threshold=10,  # Higher threshold for quality content blocks
         )
 
         # Create markdown generator with content filter
@@ -891,20 +725,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             run_config.wait_for = request.wait_for  # type: ignore[attr-defined]
 
         # Extraction strategy (best-effort mapping)
-        if getattr(request, "extraction_strategy", None):
-            if request.extraction_strategy == "llm":
-                with contextlib.suppress(Exception):
-                    run_config.extraction_strategy = LLMExtractionStrategy(  # type: ignore[attr-defined]
-                        provider="openai",
-                        api_token="",
-                        instruction="Extract main content and key information from the page",
-                    )
-            elif request.extraction_strategy == "cosine":
-                with contextlib.suppress(Exception):
-                    run_config.extraction_strategy = CosineStrategy(  # type: ignore[attr-defined]
-                        semantic_filter="main content, articles, blog posts",
-                        word_count_threshold=getattr(settings, "crawl_min_words", 50),
-                    )
+        extraction_strategy = getattr(request, "extraction_strategy", None)
+        if extraction_strategy == "llm":
+            with contextlib.suppress(Exception):
+                run_config.extraction_strategy = LLMExtractionStrategy(  # type: ignore[attr-defined]
+                    provider="openai",
+                    api_token="",
+                    instruction="Extract main content and key information from the page",
+                )
+        elif extraction_strategy == "cosine":
+            with contextlib.suppress(Exception):
+                run_config.extraction_strategy = CosineStrategy(  # type: ignore[attr-defined]
+                    semantic_filter="main content, articles, blog posts",
+                    word_count_threshold=getattr(settings, "crawl_min_words", 50),
+                )
+        # When extraction_strategy is None, crawl4ai will use default content processing
+        # with our PruningContentFilter and markdown generator for clean extraction
 
         # Chunking strategy (best-effort; only if available)
         if getattr(request, "chunking_strategy", None):

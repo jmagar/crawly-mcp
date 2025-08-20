@@ -5,9 +5,10 @@ Base crawling strategy with common functionality.
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..core.memory import MemoryManager, get_memory_manager
+if TYPE_CHECKING:
+    from ..core.memory import MemoryManager
 from ..models.crawl import CrawlResult
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,8 @@ class BaseCrawlStrategy(ABC):
     async def _initialize_managers(self) -> None:
         """Initializes the memory manager."""
         if not self.memory_manager:
+            from ..core.memory import get_memory_manager
+
             self.memory_manager = get_memory_manager()
 
     @abstractmethod

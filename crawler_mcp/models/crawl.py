@@ -62,7 +62,7 @@ class CrawlRequest(BaseModel):
     max_depth: int | None = Field(default=3, ge=1, le=10)
     include_patterns: list[str] | None = None
     exclude_patterns: list[str] | None = None
-    extraction_strategy: str = Field(default="css")
+    extraction_strategy: str | None = Field(default=None)
     wait_for: str | None = None
     remove_overlay_elements: bool = True
     extract_media: bool = False

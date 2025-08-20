@@ -239,7 +239,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
     async def scrape(
         ctx: Context,
         url: str,
-        extraction_strategy: str = "css",
+        extraction_strategy: str | None = None,
         wait_for: str | None = None,
         include_raw_html: bool = False,
         process_with_rag: bool = True,
@@ -253,7 +253,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
         Args:
             url: The URL to scrape
-            extraction_strategy: Content extraction strategy ("css", "llm", "cosine", "json_css")
+            extraction_strategy: Content extraction strategy ("llm", "cosine", "json_css") or None for default
             wait_for: CSS selector or JavaScript condition to wait for (optional)
             include_raw_html: Whether to include raw HTML in the response
             process_with_rag: Whether to process content for RAG indexing

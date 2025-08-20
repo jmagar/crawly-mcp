@@ -535,6 +535,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "chardet" },
+    { name = "coverage" },
     { name = "crawl4ai" },
     { name = "fastmcp" },
     { name = "gitpython" },
@@ -577,10 +578,14 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+test = [
+    { name = "pytest-cov" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "chardet", specifier = ">=5.2.0" },
+    { name = "coverage", specifier = ">=7.10.3" },
     { name = "crawl4ai", specifier = ">=0.7.2" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "gitpython", specifier = ">=3.1.40" },
@@ -618,6 +623,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
     { name = "ruff", specifier = ">=0.12.0" },
 ]
+test = [{ name = "pytest-cov", specifier = ">=6.2.1" }]
 
 [[package]]
 name = "cryptography"

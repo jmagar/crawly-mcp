@@ -3,8 +3,8 @@ services:
     container_name: crawler-qdrant
     image: qdrant/qdrant:v1.15.1
     ports:
-      - "6333:6333"
-      - "6334:6334"  # gRPC port
+      - "7000:6333"
+      - "7001:6334"  # gRPC port
     volumes:
       - qdrant_data:/qdrant/storage
     environment:
@@ -46,8 +46,6 @@ services:
       - --tokenization-workers
       - "12"
       - --auto-truncate
-      - --max-sequence-length
-      - "512"
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=0

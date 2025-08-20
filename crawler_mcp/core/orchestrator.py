@@ -212,7 +212,7 @@ class CrawlerService:
     async def scrape_single_page(
         self,
         url: str,
-        extraction_strategy: str = "css",
+        extraction_strategy: str | None = None,
         wait_for: str | None = None,
         custom_config: dict[str, Any] | None = None,
         use_virtual_scroll: bool = False,
@@ -293,17 +293,82 @@ class CrawlerService:
             if not result.success:
                 raise Exception(f"Scraping failed: {result.error_message}")
 
-            # Create PageContent - prioritize fit markdown for clean content
+            # Extract content using proper crawl4ai patterns
+            # result.markdown is a MarkdownGenerationResult object with raw_markdown and fit_markdown attributes
+            best_content = ""
+            if result.markdown:
+                try:
+                    # Check if result.markdown is an integer (hash ID issue)
+                    if isinstance(result.markdown, int):
+                        self.logger.warning(
+                            f"Detected integer markdown ({result.markdown}) for {url}, using empty content"
+                        )
+                        best_content = ""
+                    else:
+                        # First try fit_markdown (filtered content) if available
+                        if (
+                            hasattr(result.markdown, "fit_markdown")
+                            and result.markdown.fit_markdown
+                        ):
+                            content = result.markdown.fit_markdown.strip()
+                            if len(content) > 16:  # Avoid hash placeholders
+                                best_content = content
+                        # Fall back to raw_markdown (full content)
+                        elif (
+                            hasattr(result.markdown, "raw_markdown")
+                            and result.markdown.raw_markdown
+                        ):
+                            content = result.markdown.raw_markdown.strip()
+                            if len(content) > 16:  # Avoid hash placeholders
+                                best_content = content
+                        else:
+                            best_content = ""
+                except (AttributeError, TypeError) as e:
+                    if "'int' object has no attribute" in str(e):
+                        self.logger.warning(
+                            f"Caught integer markdown issue for {url}, using empty content"
+                        )
+                        best_content = ""
+                    else:
+                        self.logger.warning(
+                            f"Failed to extract markdown content for {url}: {e}"
+                        )
+                        best_content = ""
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to extract markdown content for {url}: {e}"
+                    )
+                    best_content = ""
+
+            # Validate content - ensure we didn't get object representations
+            if best_content:
+                object_indicators = [
+                    "CrawlResultContainer(",
+                    "CrawlResult(",
+                    "<property object at",
+                    "__dict__",
+                    "object at 0x",
+                    "MarkdownGenerationResult(",
+                ]
+
+                if any(indicator in best_content for indicator in object_indicators):
+                    self.logger.warning(
+                        f"Detected object representation in content for {url}, clearing"
+                    )
+                    best_content = ""
+
+                # Validate content quality - avoid storing trivial content
+                if best_content and len(best_content.strip()) < 10:
+                    self.logger.debug(f"Content too short for {url}, clearing")
+                    best_content = ""
+
+            # Create PageContent with validated content
             page_content = PageContent(
                 url=url,
                 title=result.metadata.get("title", ""),
-                content=getattr(result.markdown, "fit_markdown", None)
-                or result.markdown
-                or result.cleaned_html
-                or "",
+                content=best_content,
                 html=result.html,
-                markdown=getattr(result.markdown, "fit_markdown", None)
-                or result.markdown,
+                markdown=best_content,  # Use the validated content as markdown
                 links=[
                     link.get("href", link) if isinstance(link, dict) else link
                     for link in result.links.get("internal", [])
@@ -318,24 +383,12 @@ class CrawlerService:
                 else [],
                 metadata={
                     "extraction_strategy": extraction_strategy,
-                    "word_count": len(
-                        (
-                            getattr(result.markdown, "fit_markdown", None)
-                            or result.markdown
-                            or ""
-                        ).split()
-                    ),
+                    "word_count": len(best_content.split()) if best_content else 0,
                     "status_code": result.status_code,
                     "response_headers": dict(result.response_headers or {}),
                 },
                 timestamp=datetime.fromtimestamp(time.time()),
-                word_count=len(
-                    (
-                        getattr(result.markdown, "fit_markdown", None)
-                        or result.markdown
-                        or ""
-                    ).split()
-                ),
+                word_count=len(best_content.split()) if best_content else 0,
             )
 
             return page_content

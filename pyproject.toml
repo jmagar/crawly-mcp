@@ -46,8 +46,9 @@ dependencies = [
     "tiktoken>=0.9.0",
     "transformers>=4.55.0",
     "sentence-transformers>=5.1.0",
-    "torch>=2.8.0",
     "types-psutil>=7.0.0.20250801",
+    "torch>=2.8.0",
+    "coverage>=7.10.3",
 ]
 
 [project.optional-dependencies]
@@ -136,6 +137,31 @@ follow_imports = "skip"
 
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
+minversion = "7.4"
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--disable-warnings",
+    "--tb=short",
+    "-ra",
+]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore:.*@validator.*is deprecated:DeprecationWarning",
+    "ignore:Support for class-based.*config.*is deprecated.*:DeprecationWarning",
+    "ignore:The 'text' argument to find\\(\\)-type methods is deprecated.*:DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "requires_services: marks tests that require external services (Qdrant, TEI)",
+    "asyncio: marks tests as asyncio tests",
+]
 
 [dependency-groups]
 dev = [
@@ -144,4 +170,7 @@ dev = [
     "pre-commit>=4.2.0",
     "pytest>=8.4.1",
     "pytest-asyncio>=1.1.0",
+]
+test = [
+    "pytest-cov>=6.2.1",
 ]

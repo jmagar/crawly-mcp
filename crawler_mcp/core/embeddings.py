@@ -235,7 +235,7 @@ class EmbeddingService:
                 )
 
             logger.info(
-                f"Generated {len(results)} embeddings in {processing_time:.2f}s (true batch)"
+                f"Generated {len(results)} embeddings in {processing_time:.2f}s (true batch) - {len(results) / processing_time:.1f} embeddings/sec"
             )
             return results
 
@@ -286,6 +286,9 @@ class EmbeddingService:
 
         logger.info(f"Processing {len(valid_texts)} texts in {total_batches} batches")
 
+        # Start timing the entire batch process
+        batch_start_time = time.time()
+
         for batch_idx in range(total_batches):
             start_idx = batch_idx * batch_size
             end_idx = min(start_idx + batch_size, len(valid_texts))
@@ -332,6 +335,13 @@ class EmbeddingService:
             except Exception as e:
                 logger.error(f"Batch processing failed: {e}")
                 raise ToolError(f"Batch embedding generation failed: {e!s}") from e
+
+        # Log total batch processing time
+        batch_end_time = time.time()
+        total_batch_time = batch_end_time - batch_start_time
+        logger.info(
+            f"Completed embedding generation for {len(valid_texts)} texts in {total_batch_time:.2f}s - {len(valid_texts) / total_batch_time:.1f} embeddings/sec"
+        )
 
         # Sort results by original index and return embedding results
         results.sort(key=lambda x: x[0])

@@ -36,21 +36,21 @@ services:
       - --max-concurrent-requests
       - "512"
       - --max-batch-tokens
-      - "1000"
+      - "131072"
       - --max-batch-requests
-      - "512"
+      - "128"
       - --max-client-batch-size
-      - "512"
+      - "128"
       - --pooling
       - "last-token"
       - --tokenization-workers
-      - "12"
+      - "8"
       - --auto-truncate
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
       - CUDA_VISIBLE_DEVICES=0
-      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-      - OMP_NUM_THREADS=12
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
+      - OMP_NUM_THREADS=8
       - TOKENIZERS_PARALLELISM=true
       - CUDA_CACHE_DISABLE=0
       - RUST_LOG=text_embeddings_router=info

@@ -8,6 +8,7 @@ import logging
 import re
 import time
 import uuid
+from asyncio import Queue, Semaphore
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -972,7 +973,7 @@ class RagService:
                 "chunks_deleted": chunks_deleted,
             }
 
-        # Generate embeddings in batches
+        # Generate embeddings with parallel pipeline processing
         if progress_callback:
             progress_callback(
                 total_pages,
@@ -981,30 +982,20 @@ class RagService:
             )
 
         try:
-            # Extract texts for embedding
-            texts = [chunk.content for chunk in document_chunks]
+            # Start timing embedding generation
+            embedding_start_time = time.time()
 
-            # Generate embeddings using true batch processing for speed
-            if len(texts) <= settings.tei_batch_size:
-                # Small batch - use true batch for maximum speed
-                embedding_results = (
-                    await self.embedding_service.generate_embeddings_true_batch(texts)
-                )
-            else:
-                # Large batch - fallback to chunked processing
-                embedding_results = (
-                    await self.embedding_service.generate_embeddings_batch(
-                        texts, batch_size=settings.tei_batch_size
-                    )
-                )
+            # Use parallel pipeline processing for maximum throughput
+            total_embeddings = await self._process_embeddings_pipeline(
+                document_chunks, progress_callback, total_pages
+            )
 
-            # Attach embeddings to document chunks
-            for chunk, embedding_result in zip(
-                document_chunks, embedding_results, strict=False
-            ):
-                chunk.embedding = embedding_result.embedding
-
-            total_embeddings = len(embedding_results)
+            # Log embedding generation time
+            embedding_end_time = time.time()
+            embedding_duration = embedding_end_time - embedding_start_time
+            logger.info(
+                f"Generated {total_embeddings} embeddings in {embedding_duration:.2f}s - {total_embeddings / embedding_duration:.1f} embeddings/sec (parallel pipeline)"
+            )
 
         except Exception as e:
             logger.error(f"Error generating embeddings: {e}")
@@ -1019,8 +1010,17 @@ class RagService:
             )
 
         try:
+            # Start timing vector storage
+            storage_start_time = time.time()
+
             stored_count = await self.vector_service.upsert_documents(document_chunks)
-            logger.info(f"Stored {stored_count} document chunks in vector database")
+
+            # Log vector storage time
+            storage_end_time = time.time()
+            storage_duration = storage_end_time - storage_start_time
+            logger.info(
+                f"Stored {stored_count} document chunks in vector database in {storage_duration:.2f}s"
+            )
 
         except Exception as e:
             logger.error(f"Error storing embeddings: {e}")
@@ -1361,3 +1361,167 @@ class RagService:
         except Exception as e:
             logger.error(f"Error deleting source {source_url}: {e}")
             return False
+
+    async def _process_embeddings_pipeline(
+        self,
+        document_chunks: list[DocumentChunk],
+        progress_callback: Callable | None = None,
+        base_progress: int = 0,
+    ) -> int:
+        """
+        Process embeddings using parallel pipeline for maximum performance.
+
+        Uses multiple concurrent workers to:
+        1. Generate embeddings in parallel batches
+        2. Store vectors concurrently as they're ready
+        3. Provide real-time progress feedback
+
+        Args:
+            document_chunks: List of document chunks to process
+            progress_callback: Optional progress callback function
+            base_progress: Base progress offset for reporting
+
+        Returns:
+            Total number of embeddings generated
+        """
+        if not document_chunks:
+            return 0
+
+        # Configure pipeline parameters based on our optimized settings
+        max_concurrent_embedding_batches = min(
+            4, (len(document_chunks) // 64) + 1
+        )  # 4 parallel embedding workers
+        max_concurrent_storage_ops = 8  # 8 parallel storage operations
+        embedding_batch_size = settings.tei_batch_size  # 64 from our extreme config
+
+        # Create queues for pipeline stages
+        storage_queue: Queue = Queue(maxsize=max_concurrent_storage_ops * 2)
+
+        # Semaphores to control concurrency
+        embedding_semaphore = Semaphore(max_concurrent_embedding_batches)
+        storage_semaphore = Semaphore(max_concurrent_storage_ops)
+
+        # Split chunks into batches for embedding
+        chunk_batches = [
+            document_chunks[i : i + embedding_batch_size]
+            for i in range(0, len(document_chunks), embedding_batch_size)
+        ]
+
+        logger.info(
+            f"Starting parallel pipeline: {len(chunk_batches)} embedding batches, "
+            f"{max_concurrent_embedding_batches} embedding workers, "
+            f"{max_concurrent_storage_ops} storage workers"
+        )
+
+        # Progress tracking
+        embeddings_completed = 0
+        storage_completed = 0
+        total_chunks = len(document_chunks)
+
+        async def embedding_worker(batch_id: int, chunk_batch: list[DocumentChunk]):
+            """Worker to generate embeddings for a batch of chunks."""
+            async with embedding_semaphore:
+                try:
+                    texts = [chunk.content for chunk in chunk_batch]
+
+                    # Use true batch processing for maximum speed
+                    if len(texts) <= 512:  # Our extreme true batch threshold
+                        embedding_results = (
+                            await self.embedding_service.generate_embeddings_true_batch(
+                                texts
+                            )
+                        )
+                    else:
+                        embedding_results = (
+                            await self.embedding_service.generate_embeddings_batch(
+                                texts, batch_size=embedding_batch_size
+                            )
+                        )
+
+                    # Attach embeddings to chunks
+                    for chunk, embedding_result in zip(
+                        chunk_batch, embedding_results, strict=False
+                    ):
+                        chunk.embedding = embedding_result.embedding
+
+                    # Queue batch for storage
+                    await storage_queue.put((batch_id, chunk_batch))
+
+                    nonlocal embeddings_completed
+                    embeddings_completed += len(chunk_batch)
+
+                    logger.debug(
+                        f"Embedding batch {batch_id} completed: {len(chunk_batch)} chunks"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error in embedding worker {batch_id}: {e}")
+                    # Still queue for storage with empty embeddings to maintain progress
+                    await storage_queue.put((batch_id, chunk_batch))
+
+        async def storage_worker():
+            """Worker to store embedded chunks as they become available."""
+            processed_batches = 0
+            while processed_batches < len(chunk_batches):
+                try:
+                    async with storage_semaphore:
+                        batch_id, chunk_batch = await storage_queue.get()
+
+                        # Filter chunks with valid embeddings
+                        valid_chunks = [
+                            chunk
+                            for chunk in chunk_batch
+                            if chunk.embedding is not None
+                        ]
+
+                        if valid_chunks:
+                            # Store chunks in Qdrant concurrently
+                            await self.vector_service.add_documents(valid_chunks)
+
+                        nonlocal storage_completed
+                        storage_completed += len(chunk_batch)
+                        processed_batches += 1
+
+                        # Update progress
+                        if progress_callback:
+                            progress = base_progress + int(
+                                (storage_completed / total_chunks) * 10
+                            )  # 10 units for embeddings
+                            progress_callback(
+                                progress,
+                                base_progress + 10,
+                                f"Processed {storage_completed}/{total_chunks} chunks",
+                            )
+
+                        logger.debug(
+                            f"Storage batch {batch_id} completed: {len(valid_chunks)} chunks stored"
+                        )
+
+                        storage_queue.task_done()
+
+                except Exception as e:
+                    logger.error(f"Error in storage worker: {e}")
+                    storage_queue.task_done()
+                    processed_batches += 1
+
+        # Start all workers concurrently
+        tasks = []
+
+        # Start embedding workers
+        for batch_id, chunk_batch in enumerate(chunk_batches):
+            task = asyncio.create_task(embedding_worker(batch_id, chunk_batch))
+            tasks.append(task)
+
+        # Start storage worker
+        storage_task = asyncio.create_task(storage_worker())
+        tasks.append(storage_task)
+
+        # Wait for all workers to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        logger.info(
+            f"Parallel pipeline completed: {embeddings_completed} embeddings generated, "
+            f"{storage_completed} chunks processed"
+        )
+
+        return embeddings_completed

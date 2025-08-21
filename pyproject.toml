@@ -153,6 +153,8 @@ filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore:.*@validator.*is deprecated:DeprecationWarning",
     "ignore:Support for class-based.*config.*is deprecated.*:DeprecationWarning",
+    # Comprehensive BeautifulSoup 'text' argument deprecation warning filters
+    "ignore:.*'text'.*argument.*find.*deprecated.*:DeprecationWarning",
     "ignore:The 'text' argument to find\\(\\)-type methods is deprecated.*:DeprecationWarning",
 ]
 markers = [

@@ -16,6 +16,12 @@ warnings.filterwarnings(
     message="Support for class-based.*config.*is deprecated.*",
     category=DeprecationWarning,
 )
+# More comprehensive pattern to catch all BeautifulSoup 'text' deprecation warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*'text'.*argument.*find.*deprecated.*",
+    category=DeprecationWarning,
+)
 warnings.filterwarnings(
     "ignore",
     message="The 'text' argument to find\\(\\)-type methods is deprecated.*",

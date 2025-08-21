@@ -1389,8 +1389,8 @@ class RagService:
 
         # Configure pipeline parameters based on our optimized settings
         max_concurrent_embedding_batches = min(
-            4, (len(document_chunks) // 64) + 1
-        )  # 4 parallel embedding workers
+            settings.embedding_workers, (len(document_chunks) // 64) + 1
+        )  # Configurable parallel embedding workers
         max_concurrent_storage_ops = 8  # 8 parallel storage operations
         embedding_batch_size = settings.tei_batch_size  # 64 from our extreme config
 
@@ -1476,7 +1476,7 @@ class RagService:
 
                         if valid_chunks:
                             # Store chunks in Qdrant concurrently
-                            await self.vector_service.add_documents(valid_chunks)
+                            await self.vector_service.upsert_documents(valid_chunks)
 
                         nonlocal storage_completed
                         storage_completed += len(chunk_batch)
@@ -1504,20 +1504,17 @@ class RagService:
                     storage_queue.task_done()
                     processed_batches += 1
 
-        # Start all workers concurrently
-        tasks = []
-
-        # Start embedding workers
-        for batch_id, chunk_batch in enumerate(chunk_batches):
-            task = asyncio.create_task(embedding_worker(batch_id, chunk_batch))
-            tasks.append(task)
+        # Create all embedding worker tasks at once for true parallelism
+        embedding_tasks = [
+            embedding_worker(batch_id, chunk_batch)
+            for batch_id, chunk_batch in enumerate(chunk_batches)
+        ]
 
         # Start storage worker
-        storage_task = asyncio.create_task(storage_worker())
-        tasks.append(storage_task)
+        storage_task = storage_worker()
 
-        # Wait for all workers to complete
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # Execute all tasks truly in parallel
+        await asyncio.gather(*embedding_tasks, storage_task, return_exceptions=True)
 
         logger.info(
             f"Parallel pipeline completed: {embeddings_completed} embeddings generated, "

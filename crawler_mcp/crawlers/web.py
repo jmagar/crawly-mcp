@@ -130,14 +130,41 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
             first_url = request.url[0] if isinstance(request.url, list) else request.url
 
-            # Create minimal browser config - let Crawl4AI handle optimization
+            # High-performance browser config optimized for i7-13700k + RTX 4070
             browser_config = BrowserConfig(
                 headless=settings.crawl_headless,
                 browser_type=settings.crawl_browser,
-                light_mode=True,  # Let Crawl4AI optimize performance
-                text_mode=getattr(settings, "crawl_block_images", False),
+                light_mode=getattr(
+                    settings, "crawl_light_mode", True
+                ),  # Optimized performance mode
+                text_mode=getattr(
+                    settings, "crawl_text_mode", False
+                ),  # 3-4x faster when enabled
                 verbose=False,  # Suppress Crawl4AI console output for MCP compatibility
-                # NO extra_args - avoid flag conflicts
+                # Aggressive performance settings
+                extra_args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    # GPU Acceleration for RTX 4070
+                    "--enable-gpu",  # Enable GPU acceleration
+                    "--enable-accelerated-2d-canvas",  # GPU for 2D canvas
+                    "--enable-gpu-compositing",  # GPU for compositing
+                    "--enable-gpu-rasterization",  # GPU for rasterization
+                    "--ignore-gpu-blocklist",  # Use GPU even if blocklisted
+                    "--disable-gpu-sandbox",  # Remove GPU sandbox restrictions
+                    "--enable-zero-copy",  # Zero-copy GPU textures
+                    "--use-gl=egl",  # Use EGL for headless GPU
+                    "--max_old_space_size=4096",  # 4GB memory per browser
+                    "--disable-background-timer-throttling",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--aggressive-cache-discard",
+                    "--memory-pressure-off",
+                    # Network optimizations for faster page loads
+                    "--max-connections-per-host=30",  # Match semaphore_count
+                    "--enable-quic",
+                    "--enable-tcp-fast-open",
+                ],
             )
 
             # Create fresh AsyncWebCrawler instance with stdout suppressed
@@ -179,196 +206,30 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             if progress_callback:
                 progress_callback(0, max_pages, "Starting crawl...")
 
-            # Delegate crawling to crawl4ai using deep crawl + streaming
+            # Choose crawling approach: arun_many() with sitemap URLs or BFSDeepCrawlStrategy
             crawl_count = 0
-            self.logger.info(
-                "Starting async iteration with stream=True and deep crawl strategy..."
-            )
+            if (
+                getattr(settings, "use_arun_many_for_sitemaps", False)
+                and sitemap_seeds
+                and len(sitemap_seeds) > 1
+            ):
+                self.logger.info(
+                    f"Using arun_many() approach with {len(sitemap_seeds)} sitemap URLs (max_concurrent_sessions={getattr(settings, 'max_concurrent_sessions', 20)})"
+                )
+                successful_results = await self._crawl_using_arun_many(
+                    browser, sitemap_seeds, run_config, request, progress_callback
+                )
+            else:
+                self.logger.info(
+                    "Using BFSDeepCrawlStrategy approach with async iteration..."
+                )
+                successful_results = await self._crawl_using_deep_strategy(
+                    browser, first_url, run_config, max_pages
+                )
 
-            # Collect successful results first
-            successful_results = []
-            with suppress_stdout():
-                try:
-                    # Get result from arun - type depends on config.stream setting
-                    self.logger.info(
-                        "About to call browser.arun with stream=%s", run_config.stream
-                    )
-                    crawl_result = await browser.arun(url=first_url, config=run_config)
-                    self.logger.info("browser.arun completed successfully")
-
-                    # Debug: Log the actual type we received
-                    self.logger.info(
-                        "CRAWL DEBUG: crawl_result type = %s, stream=%s, deep_crawl=%s",
-                        type(crawl_result).__name__,
-                        run_config.stream,
-                        run_config.deep_crawl_strategy is not None,
-                    )
-
-                    # Handle different return types based on deep crawl strategy and stream setting
-                    if hasattr(crawl_result, "__aiter__"):
-                        # AsyncGenerator case (when stream=True)
-                        self.logger.info(
-                            "Processing AsyncGenerator results (stream=True mode)"
-                        )
-                        async for result in crawl_result:
-                            crawl_count += 1
-
-                            # Pre-check for unexpected types (defensive programming)
-                            if isinstance(result, int):
-                                self.logger.warning(
-                                    "Received integer %d instead of CrawlResult in streaming mode, skipping",
-                                    result,
-                                )
-                                continue
-
-                            # Ensure result is a CrawlResult object
-                            if not hasattr(result, "success"):
-                                self.logger.warning(
-                                    "Received unexpected type %s in streaming mode, skipping",
-                                    type(result).__name__,
-                                )
-                                continue
-
-                            if result.success:
-                                try:
-                                    sanitized_result = self._sanitize_crawl_result(
-                                        result
-                                    )
-                                    successful_results.append(sanitized_result)
-                                except AttributeError as e:
-                                    if (
-                                        "'int' object has no attribute 'raw_markdown'"
-                                        in str(e)
-                                    ):
-                                        self.logger.warning(
-                                            "Caught integer markdown hash issue for %s, skipping result",
-                                            result.url,
-                                        )
-                                        continue
-                                    else:
-                                        raise
-                            else:
-                                errors.append(
-                                    f"Failed to crawl {result.url}: {result.error_message}"
-                                )
-                            if len(successful_results) >= max_pages:
-                                break
-                    elif isinstance(crawl_result, list):
-                        # List case (deep crawl mode returns list even when stream=False)
-                        self.logger.info(
-                            "Processing List results (deep crawl mode with stream=False)"
-                        )
-                        for result in crawl_result:
-                            crawl_count += 1
-                            if result.success:
-                                try:
-                                    sanitized_result = self._sanitize_crawl_result(
-                                        result
-                                    )
-                                    successful_results.append(sanitized_result)
-                                except AttributeError as e:
-                                    if (
-                                        "'int' object has no attribute 'raw_markdown'"
-                                        in str(e)
-                                    ):
-                                        self.logger.warning(
-                                            "Caught integer markdown hash issue for %s, skipping result",
-                                            result.url,
-                                        )
-                                        continue
-                                    else:
-                                        raise
-                            else:
-                                errors.append(
-                                    f"Failed to crawl {result.url}: {result.error_message}"
-                                )
-                            if len(successful_results) >= max_pages:
-                                break
-                    elif isinstance(crawl_result, Crawl4aiResult):
-                        # Single result case (when stream=False and no deep crawl)
-                        crawl_count = 1
-                        self.logger.info(
-                            "Processing single CrawlResult (stream=False, no deep crawl)"
-                        )
-                        if crawl_result.success:
-                            try:
-                                sanitized_result = self._sanitize_crawl_result(
-                                    crawl_result
-                                )
-                                successful_results.append(sanitized_result)
-                                self.logger.info(
-                                    "Successfully processed single result for %s",
-                                    crawl_result.url,
-                                )
-                            except AttributeError as e:
-                                if (
-                                    "'int' object has no attribute 'raw_markdown'"
-                                    in str(e)
-                                ):
-                                    self.logger.warning(
-                                        "Caught integer markdown hash issue for %s, skipping result",
-                                        crawl_result.url,
-                                    )
-                                else:
-                                    raise
-                        else:
-                            errors.append(
-                                f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}"
-                            )
-                    elif hasattr(crawl_result, "success") and hasattr(
-                        crawl_result, "url"
-                    ):
-                        # Handle CrawlResultContainer and other container types
-                        crawl_count = 1
-                        self.logger.info(
-                            "Processing container result type: %s",
-                            type(crawl_result).__name__,
-                        )
-                        if crawl_result.success:
-                            try:
-                                sanitized_result = self._sanitize_crawl_result(
-                                    crawl_result
-                                )
-                                successful_results.append(sanitized_result)
-                                self.logger.info(
-                                    "Successfully processed container result for %s",
-                                    crawl_result.url,
-                                )
-                            except AttributeError as e:
-                                if (
-                                    "'int' object has no attribute 'raw_markdown'"
-                                    in str(e)
-                                ):
-                                    self.logger.warning(
-                                        "Caught integer markdown hash issue for %s, skipping result",
-                                        crawl_result.url,
-                                    )
-                                else:
-                                    raise
-                        else:
-                            errors.append(
-                                "Failed to crawl {}: {}".format(
-                                    crawl_result.url,
-                                    getattr(
-                                        crawl_result, "error_message", "Unknown error"
-                                    ),
-                                )
-                            )
-                    else:
-                        raise Exception(
-                            f"Unexpected crawl result type: {type(crawl_result)} (deep_crawl={run_config.deep_crawl_strategy is not None})"
-                        )
-
-                except AttributeError as e:
-                    if "'int' object has no attribute 'raw_markdown'" in str(e):
-                        self.logger.error(
-                            "Critical: Integer markdown hash issue preventing crawl iteration"
-                        )
-                        raise Exception(
-                            "Crawl failed due to integer markdown hash issue in streaming mode"
-                        ) from e
-                    else:
-                        raise
+            # Process crawling results
+            pages = []
+            errors = []
 
             # Process results outside suppress_stdout context for debugging
             for result in successful_results:
@@ -670,11 +531,23 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else int(timeout_val)
         )
 
-        # Deep crawl strategy (only for multi-page crawls)
+        # Deep crawl strategy (enable for multi-page or multi-depth crawls)
         deep_strategy = None
-        if (request.max_pages or 1) > 1 and (request.max_depth or 1) > 1:
+        max_pages = request.max_pages or getattr(settings, "crawl_max_pages", 1)
+        max_depth = request.max_depth or getattr(settings, "crawl_max_depth", 1)
+
+        # Enable deep crawling if either max_pages > 1 OR max_depth > 0
+        # This allows depth-based crawling even with unlimited pages
+        if max_pages > 1 or max_depth > 0:
+            self.logger.info(
+                f"Creating deep crawl strategy: max_pages={max_pages}, max_depth={max_depth}, sitemap_seeds={len(sitemap_seeds or [])}"
+            )
             deep_strategy = self._build_deep_crawl_strategy(
                 request, sitemap_seeds or []
+            )
+        else:
+            self.logger.info(
+                f"Skipping deep crawl strategy: max_pages={max_pages}, max_depth={max_depth}"
             )
 
         # Create content filter for fit markdown generation - optimized for clean content
@@ -687,6 +560,21 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         # Create markdown generator with content filter
         markdown_generator = DefaultMarkdownGeneratorImpl(content_filter=content_filter)
 
+        # High-performance scraping strategy (20x faster parsing)
+        scraping_strategy = None
+        if getattr(settings, "use_lxml_strategy", True):
+            try:
+                from crawl4ai.content_scraping_strategy import (
+                    LXMLWebScrapingStrategy,  # type: ignore
+                )
+
+                scraping_strategy = LXMLWebScrapingStrategy()
+                self.logger.info("Using LXMLWebScrapingStrategy for 20x faster parsing")
+            except ImportError:
+                self.logger.warning(
+                    "LXMLWebScrapingStrategy not available, using default"
+                )
+
         # Base run config with fit markdown optimization
         # NOTE: Deep crawl requires streaming mode (stream=True) to work properly
         # The BFS strategy expects an async generator, not a list
@@ -695,9 +583,13 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )  # Enable streaming only if deep crawl is used
         run_config = CrawlerRunConfig(
             deep_crawl_strategy=deep_strategy,
+            scraping_strategy=scraping_strategy,  # High-performance LXML strategy
             stream=stream_enabled,  # Enable streaming when deep crawl is used
             cache_mode=cache_mode,
             page_timeout=page_timeout,
+            semaphore_count=getattr(
+                settings, "crawl_concurrency", 30
+            ),  # Aggressive concurrency for i7-13700k
             remove_overlay_elements=getattr(settings, "crawl_remove_overlays", True),
             word_count_threshold=getattr(settings, "crawl_min_words", 50),
             check_robots_txt=False,  # per user preference
@@ -865,18 +757,24 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 max_pages,
                 "present" if filter_chain else "None",
             )
-            # Disable filter_chain - any filtering prevents multi-page crawling
+            # Minimal BFS strategy configuration for maximum crawling
+            # Omit filter_chain entirely (don't set to None) as per crawl4ai docs
             return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
                 max_depth=max_depth,
                 include_external=False,
                 max_pages=max_pages,
-                # filter_chain=filter_chain,  # Disabled - even minimal filters break it
+                # Omit filter_chain - it defaults to empty FilterChain() which allows all URLs
+                # Omit score_threshold - it defaults to -infinity which allows all URLs
             )
         except Exception as e:
             self.logger.warning("Failed to create BFS strategy: %s", e)
             # Last resort: minimal BFS parameters
             try:
-                return BFSDeepCrawlStrategy(max_depth=max_depth, include_external=False)  # type: ignore[attr-defined]
+                return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
+                    max_depth=max_depth,
+                    include_external=False,
+                    max_pages=max_pages,
+                )
             except Exception as e2:
                 self.logger.error("Failed to create minimal BFS strategy: %s", e2)
                 return None
@@ -1004,6 +902,201 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 return await resp.text()
         except Exception:
             return ""
+
+    async def _crawl_using_deep_strategy(
+        self, browser: Any, first_url: str, run_config: Any, max_pages: int
+    ) -> list[Any]:
+        """Crawl using BFSDeepCrawlStrategy with async generator."""
+        successful_results = []
+        errors = []
+
+        with suppress_stdout():
+            try:
+                # Get result from arun - type depends on config.stream setting
+                self.logger.info(
+                    "About to call browser.arun with stream=%s", run_config.stream
+                )
+                crawl_result = await browser.arun(url=first_url, config=run_config)
+                self.logger.info("browser.arun completed successfully")
+
+                # Debug: Log the actual type we received
+                self.logger.info(
+                    "CRAWL DEBUG: crawl_result type = %s, stream=%s, deep_crawl=%s",
+                    type(crawl_result).__name__,
+                    run_config.stream,
+                    run_config.deep_crawl_strategy is not None,
+                )
+
+                # Handle different return types based on deep crawl strategy and stream setting
+                if hasattr(crawl_result, "__aiter__"):
+                    # AsyncGenerator case (when stream=True)
+                    self.logger.info(
+                        "Processing AsyncGenerator results (stream=True mode) - starting iteration"
+                    )
+                    generator_count = 0
+                    async for result in crawl_result:
+                        generator_count += 1
+
+                        self.logger.info(
+                            f"AsyncGenerator yielded result #{generator_count}: {result.url if hasattr(result, 'url') else type(result).__name__}"
+                        )
+
+                        # Pre-check for unexpected types (defensive programming)
+                        if isinstance(result, int):
+                            self.logger.warning(
+                                "Received integer %d instead of CrawlResult in streaming mode, skipping",
+                                result,
+                            )
+                            continue
+
+                        # Ensure result is a CrawlResult object
+                        if not hasattr(result, "success"):
+                            self.logger.warning(
+                                "Received unexpected type %s in streaming mode, skipping",
+                                type(result).__name__,
+                            )
+                            continue
+
+                        if result.success:
+                            try:
+                                sanitized_result = self._sanitize_crawl_result(result)
+                                successful_results.append(sanitized_result)
+                            except AttributeError as e:
+                                if (
+                                    "'int' object has no attribute 'raw_markdown'"
+                                    in str(e)
+                                ):
+                                    self.logger.warning(
+                                        "Caught integer markdown hash issue for %s, skipping result",
+                                        result.url,
+                                    )
+                                    continue
+                                else:
+                                    raise
+                        else:
+                            errors.append(
+                                f"Failed to crawl {result.url}: {result.error_message}"
+                            )
+                        if len(successful_results) >= max_pages:
+                            self.logger.info(
+                                f"Breaking from AsyncGenerator loop: reached max_pages ({max_pages})"
+                            )
+                            break
+
+                    self.logger.info(
+                        f"AsyncGenerator iteration completed: yielded {generator_count} results, {len(successful_results)} successful"
+                    )
+                else:
+                    # Handle single result or list cases
+                    self.logger.info(
+                        f"Received non-async result: {type(crawl_result).__name__}"
+                    )
+                    if hasattr(crawl_result, "success"):
+                        if crawl_result.success:
+                            sanitized_result = self._sanitize_crawl_result(crawl_result)
+                            successful_results.append(sanitized_result)
+                        else:
+                            errors.append(
+                                f"Failed to crawl {crawl_result.url}: {crawl_result.error_message}"
+                            )
+
+            except Exception as e:
+                self.logger.error(f"Deep crawl strategy failed: {e}", exc_info=True)
+                errors.append(str(e))
+
+        return successful_results
+
+    async def _crawl_using_arun_many(
+        self,
+        browser: Any,
+        sitemap_urls: list[str],
+        run_config: Any,
+        request: Any,
+        progress_callback: Any,
+    ) -> list[Any]:
+        """Crawl using arun_many() with discovered sitemap URLs."""
+        from crawl4ai import MemoryAdaptiveDispatcher  # type: ignore
+
+        successful_results = []
+        max_pages = request.max_pages or len(sitemap_urls)
+        max_concurrent = getattr(settings, "max_concurrent_sessions", 20)
+
+        # Limit sitemap URLs to max_pages
+        urls_to_crawl = sitemap_urls[:max_pages]
+
+        self.logger.info(
+            f"Creating MemoryAdaptiveDispatcher with max_session_permit={max_concurrent}"
+        )
+
+        # Create dispatcher for memory-adaptive concurrency
+        dispatcher = MemoryAdaptiveDispatcher(
+            memory_threshold_percent=getattr(settings, "crawl_memory_threshold", 80.0),
+            check_interval=0.5,
+            max_session_permit=max_concurrent,
+        )
+
+        # Remove deep_crawl_strategy to avoid recursion and set streaming
+        batch_config = (
+            run_config.clone() if hasattr(run_config, "clone") else run_config
+        )
+        if hasattr(batch_config, "deep_crawl_strategy"):
+            batch_config.deep_crawl_strategy = None
+        batch_config.stream = True
+
+        self.logger.info(f"Starting arun_many with {len(urls_to_crawl)} URLs")
+
+        with suppress_stdout():
+            try:
+                # Use arun_many for concurrent crawling
+                results_generator = await browser.arun_many(
+                    urls=urls_to_crawl, config=batch_config, dispatcher=dispatcher
+                )
+
+                processed_count = 0
+                async for result in results_generator:
+                    processed_count += 1
+                    self.logger.info(
+                        f"arun_many result #{processed_count}: {result.url if hasattr(result, 'url') else type(result).__name__}"
+                    )
+
+                    if hasattr(result, "success") and result.success:
+                        try:
+                            sanitized_result = self._sanitize_crawl_result(result)
+                            successful_results.append(sanitized_result)
+
+                            if progress_callback:
+                                progress_callback(
+                                    len(successful_results),
+                                    max_pages,
+                                    f"Crawled {result.url}",
+                                )
+
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Failed to process result for {result.url}: {e}"
+                            )
+
+                    if len(successful_results) >= max_pages:
+                        self.logger.info(f"Reached max_pages limit ({max_pages})")
+                        break
+
+                self.logger.info(
+                    f"arun_many completed: {processed_count} processed, {len(successful_results)} successful"
+                )
+
+            except Exception as e:
+                self.logger.error(f"arun_many approach failed: {e}", exc_info=True)
+                # Fallback to single URL if arun_many fails
+                if urls_to_crawl:
+                    self.logger.info("Falling back to single URL crawl")
+                    single_result = await browser.arun(
+                        url=urls_to_crawl[0], config=batch_config
+                    )
+                    if hasattr(single_result, "success") and single_result.success:
+                        sanitized_result = self._sanitize_crawl_result(single_result)
+                        successful_results.append(sanitized_result)
+
+        return successful_results
 
     async def pre_execute_setup(self) -> None:
         """Setup before crawling begins."""

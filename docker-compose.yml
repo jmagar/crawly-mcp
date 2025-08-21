@@ -34,11 +34,11 @@ services:
       - --dtype
       - float16
       - --max-concurrent-requests
-      - "512"
+      - "80"
       - --max-batch-tokens
-      - "131072"
+      - "163840"
       - --max-batch-requests
-      - "128"
+      - "80"
       - --max-client-batch-size
       - "128"
       - --pooling

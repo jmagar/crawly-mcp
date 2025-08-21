@@ -42,6 +42,15 @@ class CrawlerrSettings(BaseSettings):
     )
     qdrant_timeout: float = Field(default=10.0, alias="QDRANT_TIMEOUT")
     qdrant_retry_count: int = Field(default=3, alias="QDRANT_RETRY_COUNT")
+    qdrant_connection_pool_size: int = Field(
+        default=16, alias="QDRANT_CONNECTION_POOL_SIZE", ge=1, le=32
+    )
+    qdrant_batch_size: int = Field(
+        default=256, alias="QDRANT_BATCH_SIZE", ge=64, le=512
+    )
+    qdrant_prefetch_size: int = Field(
+        default=1024, alias="QDRANT_PREFETCH_SIZE", ge=256, le=2048
+    )
 
     # HF Text Embeddings Inference (TEI)
     tei_url: str = Field(default="http://localhost:8080", alias="TEI_URL")
@@ -58,6 +67,7 @@ class CrawlerrSettings(BaseSettings):
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
     embedding_normalize: bool = Field(default=True, alias="EMBEDDING_NORMALIZE")
     embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
+    embedding_workers: int = Field(default=4, alias="EMBEDDING_WORKERS", ge=1, le=16)
 
     # Chunking Configuration
     chunk_size: int = Field(default=1024, alias="CHUNK_SIZE", gt=0, le=32768)
@@ -121,12 +131,28 @@ class CrawlerrSettings(BaseSettings):
     crawl_score_threshold: float = Field(default=0.4, alias="CRAWL_SCORE_THRESHOLD")
     crawl_virtual_scroll: bool = Field(default=True, alias="CRAWL_VIRTUAL_SCROLL")
     crawl_scroll_count: int = Field(default=20, alias="CRAWL_SCROLL_COUNT")
+    crawl_scroll_delay: int = Field(default=50, alias="CRAWL_SCROLL_DELAY")
+    crawl_virtual_scroll_batch_size: int = Field(
+        default=10, alias="CRAWL_VIRTUAL_SCROLL_BATCH_SIZE"
+    )
     crawl_memory_threshold: float = Field(default=70.0, alias="CRAWL_MEMORY_THRESHOLD")
 
     # Performance Optimization Configuration
     crawl_enable_streaming: bool = Field(default=True, alias="CRAWL_ENABLE_STREAMING")
     crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
-    # Browser pooling removed - using direct AsyncWebCrawler instances
+
+    # High-Performance Configuration (i7-13700k + RTX 4070)
+    browser_pool_size: int = Field(default=8, alias="BROWSER_POOL_SIZE", ge=1, le=16)
+    file_processing_threads: int = Field(
+        default=16, alias="FILE_PROCESSING_THREADS", ge=1, le=24
+    )
+    crawl_concurrency: int = Field(default=12, alias="CRAWL_CONCURRENCY", ge=1, le=50)
+    content_cache_size_gb: int = Field(
+        default=8, alias="CONTENT_CACHE_SIZE_GB", ge=1, le=16
+    )
+    gpu_memory_fraction: float = Field(
+        default=0.95, alias="GPU_MEMORY_FRACTION", ge=0.1, le=1.0
+    )
 
     # RTX 4070 GPU Acceleration Configuration
     gpu_acceleration: bool = Field(
@@ -141,6 +167,37 @@ class CrawlerrSettings(BaseSettings):
     )
     # Chrome flags removed - Crawl4AI light_mode handles optimization
     # GPU management removed - let Crawl4AI handle GPU acceleration
+
+    # Alternative crawling approach settings
+    use_arun_many_for_sitemaps: bool = Field(
+        default=False,
+        alias="USE_ARUN_MANY_FOR_SITEMAPS",
+        description="Use arun_many() with sitemap URLs instead of BFSDeepCrawlStrategy",
+    )
+    max_concurrent_sessions: int = Field(
+        default=20,
+        alias="CRAWL_MAX_CONCURRENT_SESSIONS",
+        ge=1,
+        le=50,
+        description="Maximum concurrent sessions for arun_many() approach",
+    )
+
+    # Crawl4AI Performance Optimizations
+    crawl_text_mode: bool = Field(
+        default=False,
+        alias="CRAWL_TEXT_MODE",
+        description="Enable text-only mode for 3-4x faster crawling (disables images)",
+    )
+    crawl_light_mode: bool = Field(
+        default=True,
+        alias="CRAWL_LIGHT_MODE",
+        description="Enable light mode to optimize browser performance",
+    )
+    use_lxml_strategy: bool = Field(
+        default=True,
+        alias="USE_LXML_STRATEGY",
+        description="Use LXMLWebScrapingStrategy for 20x faster parsing",
+    )
 
     # URL Pattern Exclusions - Following Crawl4AI best practices (minimal)
     crawl_exclude_url_patterns: list[str] = Field(

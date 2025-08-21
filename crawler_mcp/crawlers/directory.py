@@ -3,6 +3,7 @@ Directory crawling strategy with intelligent file processing.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 import time
 from collections.abc import Callable
@@ -110,45 +111,36 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                     "System may have insufficient memory for directory processing"
                 )
 
-            # Process files with intelligent batching
+            # Process files with high-performance concurrent processing
             pages = []
             errors = []
             total_bytes = 0
 
-            batch_size = min(20, max(1, len(files) // 10))  # Adaptive batch size
+            # Use ThreadPoolExecutor for maximum CPU utilization
+            if progress_callback:
+                progress_callback(
+                    0, len(files), "Starting high-performance file processing..."
+                )
 
-            for i in range(0, len(files), batch_size):
-                batch_files = files[i : i + batch_size]
+            batch_results = await self._process_files_highly_concurrent(
+                files, directory
+            )
 
-                if progress_callback:
-                    progress_callback(
-                        i,
-                        len(files),
-                        f"Processing files {i + 1}-{min(i + batch_size, len(files))}",
-                    )
+            for batch_result in batch_results:
+                if isinstance(batch_result, PageContent):
+                    pages.append(batch_result)
+                    total_bytes += len(batch_result.content)
+                elif isinstance(batch_result, Exception):
+                    errors.append(str(batch_result))
 
-                # Process batch
-                batch_results = await self._process_file_batch(batch_files, directory)
-
-                for batch_result in batch_results:
-                    if isinstance(batch_result, PageContent):
-                        pages.append(batch_result)
-                        total_bytes += len(batch_result.content)
-                    else:
-                        errors.append(str(batch_result))
-
-                # Memory pressure check
-                if (
-                    self.memory_manager
-                    and await self.memory_manager.check_memory_pressure()
-                ):
-                    self.logger.warning(
-                        "Memory pressure detected during directory processing"
-                    )
-
-                # Small delay to prevent overwhelming the system
-                if i + batch_size < len(files):
-                    await asyncio.sleep(0.01)
+            # Memory pressure check after processing
+            if (
+                self.memory_manager
+                and await self.memory_manager.check_memory_pressure()
+            ):
+                self.logger.warning(
+                    "Memory pressure detected during directory processing"
+                )
 
             # Calculate statistics
             end_time = time.time()
@@ -415,27 +407,59 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
 
         return scored_files
 
-    async def _process_file_batch(
-        self, files: list[Path], base_directory: Path
+    async def _process_files_highly_concurrent(
+        self, file_paths: list[Path], base_directory: Path
     ) -> list[PageContent | Exception]:
-        """Process a batch of files concurrently."""
-        semaphore = asyncio.Semaphore(5)  # Limit concurrent file operations
+        """Process files with full CPU utilization using ThreadPoolExecutor."""
+        from ..config import settings
 
-        async def process_single_file(file_path: Path) -> PageContent | Exception:
-            async with semaphore:
-                try:
-                    return await self._process_single_file(file_path, base_directory)
-                except Exception as e:
-                    return Exception(f"Error processing {file_path}: {e}")
+        # Use configured thread count (default 16 for i7-13700k)
+        max_workers = getattr(settings, "file_processing_threads", 16)
 
-        tasks = [process_single_file(file_path) for file_path in files]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return [r for r in results if isinstance(r, PageContent | Exception)]
+        self.logger.info(
+            f"Processing {len(file_paths)} files with {max_workers} threads"
+        )
 
-    async def _process_single_file(
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            loop = asyncio.get_event_loop()
+
+            # Process files in parallel using all available threads
+            tasks = [
+                loop.run_in_executor(
+                    executor, self._process_single_file_sync, file_path, base_directory
+                )
+                for file_path in file_paths
+            ]
+
+            # Use asyncio.gather for true parallelism
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Filter and return results
+            processed_results = []
+            for result in results:
+                if isinstance(result, PageContent | Exception):
+                    processed_results.append(result)
+                else:
+                    # Handle any unexpected return types
+                    processed_results.append(
+                        Exception(f"Unexpected result type: {type(result)}")
+                    )
+
+            return processed_results
+
+    def _process_single_file_sync(
+        self, file_path: Path, base_directory: Path
+    ) -> PageContent | Exception:
+        """Synchronous file processing for thread pool."""
+        try:
+            return self._process_single_file_sync_impl(file_path, base_directory)
+        except Exception as e:
+            return Exception(f"Error processing {file_path}: {e}")
+
+    def _process_single_file_sync_impl(
         self, file_path: Path, base_directory: Path
     ) -> PageContent:
-        """Process a single file and create PageContent."""
+        """Synchronous implementation of file processing."""
         try:
             # Read file content
             with file_path.open("r", encoding="utf-8", errors="ignore") as f:

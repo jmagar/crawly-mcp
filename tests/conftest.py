@@ -37,6 +37,9 @@ warnings.filterwarnings("ignore", message=".*_NoValueType.*")
 from crawler_mcp.config import CrawlerrSettings, settings
 from crawler_mcp.core import EmbeddingService, RagService, VectorService
 
+# Test constants
+EMBEDDING_DIM = 384  # Qwen3-Embedding-0.6B dimension
+
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:

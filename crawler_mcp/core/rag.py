@@ -488,6 +488,28 @@ class RagService:
         """Find word boundary."""
         return find_word_boundary(search_text, ideal_end)
 
+    def _calculate_accurate_token_count(self, text: str) -> int:
+        """
+        Calculate accurate token count using actual tokenizer when available.
+
+        Args:
+            text: Text to count tokens for
+
+        Returns:
+            Accurate token count
+        """
+        if self.tokenizer:
+            try:
+                # Use actual tokenizer for precise count
+                tokens = self.tokenizer.encode(text)
+                return len(tokens)
+            except Exception as e:
+                logger.debug(f"Tokenizer failed, falling back to estimation: {e}")
+
+        # Fallback to word-based estimation with configurable ratio
+        word_count = len(text.split())
+        return int(word_count * settings.word_to_token_ratio)
+
     def _chunk_text_character_based(
         self,
         text: str,
@@ -532,8 +554,8 @@ class RagService:
                     "end_pos": end,
                     "word_count": len(chunk_text.split()),
                     "char_count": len(chunk_text),
-                    "token_count_estimate": int(
-                        len(chunk_text.split()) * settings.word_to_token_ratio
+                    "token_count_estimate": self._calculate_accurate_token_count(
+                        chunk_text
                     ),
                     **(metadata or {}),
                 }
@@ -785,13 +807,22 @@ class RagService:
                     )
 
                 # Split page content into optimal chunks for Qwen3-Embedding-0.6B
+                # Preserve all PageContent metadata during chunking
                 text_chunks = self._chunk_text_character_based(
                     page.content,
                     metadata={
                         "source_url": page.url,
                         "source_title": page.title,
                         "page_index": i,
-                        **page.metadata.get("chunk_metadata", {}),
+                        "markdown": page.markdown,
+                        "html": page.html,
+                        "links": page.links,
+                        "images": page.images,
+                        "page_word_count": page.word_count,
+                        "timestamp": page.timestamp.isoformat()
+                        if page.timestamp
+                        else None,
+                        **page.metadata,  # Include all original metadata, not just chunk_metadata
                     },
                 )
 
@@ -926,13 +957,18 @@ class RagService:
 
         # Step 2: Handle orphaned chunks (chunks that exist but are not in new crawl)
         if deduplication and settings.delete_orphaned_chunks and total_pages > 0:
-            # Find orphaned chunk IDs
+            # Find orphaned chunk IDs - need to match actual chunk generation logic
             new_chunk_ids = set()
             for i, page in enumerate(crawl_result.pages):
-                chunk_metadata = page.metadata.get("chunk_metadata", {})
-                chunk_index = chunk_metadata.get("chunk_index", i)
-                chunk_id = self._generate_deterministic_id(page.url, chunk_index)
-                new_chunk_ids.add(chunk_id)
+                # Re-chunk the page to get the same chunk structure as processing
+                temp_chunks = self._chunk_text_character_based(page.content)
+                for sub_chunk_idx, _ in enumerate(temp_chunks):
+                    # Generate the same composite chunk index used in processing
+                    composite_chunk_index = f"{i}_{sub_chunk_idx}"
+                    chunk_id = self._generate_deterministic_id(
+                        page.url, composite_chunk_index
+                    )
+                    new_chunk_ids.add(chunk_id)
 
             # Identify orphaned chunks (exist in DB but not in new crawl)
             orphaned_ids = set(existing_chunks_map.keys()) - new_chunk_ids

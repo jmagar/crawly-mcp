@@ -78,7 +78,7 @@ class CrawlerrSettings(BaseSettings):
     reranker_model: str = Field(
         default="tomaarsen/Qwen3-Reranker-0.6B-seq-cls", alias="RERANKER_MODEL"
     )
-    reranker_enabled: bool = Field(default=True, alias="RERANKER_ENABLED")
+    reranker_enabled: bool = Field(default=False, alias="RERANKER_ENABLED")
     reranker_top_k: int = Field(default=10, alias="RERANKER_TOP_K", gt=0, le=100)
     reranker_max_length: int = Field(
         default=512, alias="RERANKER_MAX_LENGTH", gt=0, le=4096
@@ -92,6 +92,20 @@ class CrawlerrSettings(BaseSettings):
     def _validate_reranker_model(cls, v: str) -> str:
         if not v or not str(v).strip():
             raise ValueError(RERANKER_MODEL_ERROR)
+        return v
+
+    @field_validator("embedding_workers")
+    @classmethod
+    def validate_embedding_workers(cls, v: int) -> int:
+        if not 1 <= v <= 32:
+            raise ValueError("embedding_workers must be between 1 and 32")
+        return v
+
+    @field_validator("browser_pool_size")
+    @classmethod
+    def validate_browser_pool_size(cls, v: int) -> int:
+        if not 1 <= v <= 20:
+            raise ValueError("browser_pool_size must be between 1 and 20")
         return v
 
     # GPU flag validation removed - no longer using custom Chrome flags
@@ -192,6 +206,11 @@ class CrawlerrSettings(BaseSettings):
         default=True,
         alias="CRAWL_LIGHT_MODE",
         description="Enable light mode to optimize browser performance",
+    )
+    crawl_enable_gpu: bool = Field(
+        default=False,
+        alias="CRAWL_ENABLE_GPU",
+        description="Enable GPU acceleration for browsers (requires GPU support)",
     )
     use_lxml_strategy: bool = Field(
         default=True,

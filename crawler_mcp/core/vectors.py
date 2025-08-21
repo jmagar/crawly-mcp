@@ -355,7 +355,7 @@ class VectorService:
             results: list[Any] = []
             if hasattr(query_response, "points"):
                 results = query_response.points
-            elif isinstance(query_response, tuple | list) and len(query_response) > 0:
+            elif isinstance(query_response, (tuple, list)) and len(query_response) > 0:
                 results = query_response[0]
             else:
                 # Cast to list for consistent handling

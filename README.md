@@ -58,9 +58,17 @@ docker-compose ps
 # Using uv (recommended)
 uv sync
 
+# For ML features (reranking, local embeddings)
+uv sync --extra ml
+
 # Or with pip
-pip install -r requirements.txt
+pip install -e .
+
+# For ML features with pip
+pip install -e .[ml]
 ```
+
+> **Note**: The ML dependencies (torch, transformers, sentence-transformers) are optional. Install the `[ml]` extra only if you need local reranking capabilities. For most use cases, the default installation with remote embeddings via HF TEI is sufficient.
 
 ### 4. Run the Server
 ```bash

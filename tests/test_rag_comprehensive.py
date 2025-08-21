@@ -531,7 +531,7 @@ class TestRagServiceCoreWorkflows:
             query="FastMCP testing capabilities",
             sources=["https://example.com/test-query"],
             limit=5,
-            score_threshold=0.1,
+            min_score=0.1,
         )
 
         result = await rag_service.query(query)

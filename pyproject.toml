@@ -44,18 +44,20 @@ dependencies = [
     "chardet>=5.2.0",
     "pydantic-settings>=2.10.1",
     "tiktoken>=0.9.0",
-    "transformers>=4.55.0",
-    "sentence-transformers>=5.1.0",
     "types-psutil>=7.0.0.20250801",
-    "torch>=2.8.0",
-    "coverage>=7.10.3",
 ]
 
 [project.optional-dependencies]
+ml = [
+    "torch>=2.8.0",
+    "transformers>=4.55.0",
+    "sentence-transformers>=5.1.0",
+]
 dev = [
     "ruff>=0.12.0",
     "mypy>=1.7.0",
     "pre-commit>=3.5.0",
+    "coverage>=7.10.3",
 ]
 test = [
     "pytest>=7.4.0",
@@ -120,8 +122,7 @@ disallow_untyped_decorators = true
 allow_subclassing_any = true
 allow_untyped_calls = false
 
-# Disable specific checks for dynamic imports
-disable_error_code = ["no-any-return"]
+# Enable strict type checking
 
 # Handle missing imports gracefully for optional dependencies
 ignore_missing_imports = false
@@ -137,11 +138,10 @@ follow_imports = "skip"
 
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
-minversion = "7.4"
+minversion = "8.4"
 addopts = [
     "--strict-config",
     "--strict-markers",
-    "--disable-warnings",
     "--tb=short",
     "-ra",
 ]

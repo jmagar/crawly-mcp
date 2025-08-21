@@ -145,16 +145,21 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 extra_args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
-                    # GPU Acceleration for RTX 4070
-                    "--enable-gpu",  # Enable GPU acceleration
-                    "--enable-accelerated-2d-canvas",  # GPU for 2D canvas
-                    "--enable-gpu-compositing",  # GPU for compositing
-                    "--enable-gpu-rasterization",  # GPU for rasterization
-                    "--ignore-gpu-blocklist",  # Use GPU even if blocklisted
-                    "--disable-gpu-sandbox",  # Remove GPU sandbox restrictions
-                    "--enable-zero-copy",  # Zero-copy GPU textures
-                    "--use-gl=egl",  # Use EGL for headless GPU
-                    "--max_old_space_size=4096",  # 4GB memory per browser
+                    # Conditionally enable GPU flags only when a GPU is available
+                    *(
+                        [
+                            "--enable-gpu",
+                            "--enable-accelerated-2d-canvas",
+                            "--enable-gpu-compositing",
+                            "--enable-gpu-rasterization",
+                            "--ignore-gpu-blocklist",
+                            "--disable-gpu-sandbox",
+                            "--enable-zero-copy",
+                            "--use-gl=egl",
+                        ]
+                        if getattr(settings, "crawl_enable_gpu", False)
+                        else []
+                    ),
                     "--disable-background-timer-throttling",
                     "--disable-backgrounding-occluded-windows",
                     "--disable-renderer-backgrounding",
@@ -216,20 +221,19 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 self.logger.info(
                     f"Using arun_many() approach with {len(sitemap_seeds)} sitemap URLs (max_concurrent_sessions={getattr(settings, 'max_concurrent_sessions', 20)})"
                 )
-                successful_results = await self._crawl_using_arun_many(
+                successful_results, errors = await self._crawl_using_arun_many(
                     browser, sitemap_seeds, run_config, request, progress_callback
                 )
             else:
                 self.logger.info(
                     "Using BFSDeepCrawlStrategy approach with async iteration..."
                 )
-                successful_results = await self._crawl_using_deep_strategy(
+                successful_results, errors = await self._crawl_using_deep_strategy(
                     browser, first_url, run_config, max_pages
                 )
 
             # Process crawling results
             pages = []
-            errors = []
 
             # Process results outside suppress_stdout context for debugging
             for result in successful_results:
@@ -527,7 +531,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         timeout_val = getattr(settings, "crawler_timeout", 30000)
         page_timeout = (
             int(timeout_val * 1000)
-            if isinstance(timeout_val, int | float) and timeout_val < 1000
+            if isinstance(timeout_val, (int, float)) and timeout_val < 1000
             else int(timeout_val)
         )
 
@@ -905,7 +909,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     async def _crawl_using_deep_strategy(
         self, browser: Any, first_url: str, run_config: Any, max_pages: int
-    ) -> list[Any]:
+    ) -> tuple[list[Any], list[str]]:
         """Crawl using BFSDeepCrawlStrategy with async generator."""
         successful_results = []
         errors = []
@@ -1004,7 +1008,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 self.logger.error(f"Deep crawl strategy failed: {e}", exc_info=True)
                 errors.append(str(e))
 
-        return successful_results
+        return successful_results, errors
 
     async def _crawl_using_arun_many(
         self,
@@ -1013,11 +1017,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         run_config: Any,
         request: Any,
         progress_callback: Any,
-    ) -> list[Any]:
+    ) -> tuple[list[Any], list[str]]:
         """Crawl using arun_many() with discovered sitemap URLs."""
         from crawl4ai import MemoryAdaptiveDispatcher  # type: ignore
 
-        successful_results = []
+        successful_results: list[Any] = []
+        errors: list[str] = []
         max_pages = request.max_pages or len(sitemap_urls)
         max_concurrent = getattr(settings, "max_concurrent_sessions", 20)
 
@@ -1073,8 +1078,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
                         except Exception as e:
                             self.logger.warning(
-                                f"Failed to process result for {result.url}: {e}"
+                                "Failed to process result for %s: %s",
+                                getattr(result, "url", "unknown"),
+                                e,
                             )
+                            errors.append(str(e))
 
                     if len(successful_results) >= max_pages:
                         self.logger.info(f"Reached max_pages limit ({max_pages})")
@@ -1085,7 +1093,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 )
 
             except Exception as e:
-                self.logger.error(f"arun_many approach failed: {e}", exc_info=True)
+                self.logger.error("arun_many approach failed: %s", e, exc_info=True)
                 # Fallback to single URL if arun_many fails
                 if urls_to_crawl:
                     self.logger.info("Falling back to single URL crawl")
@@ -1095,8 +1103,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     if hasattr(single_result, "success") and single_result.success:
                         sanitized_result = self._sanitize_crawl_result(single_result)
                         successful_results.append(sanitized_result)
+                    else:
+                        errors.append(
+                            f"Failed to crawl {getattr(single_result, 'url', urls_to_crawl[0])}"
+                        )
 
-        return successful_results
+        return successful_results, errors
 
     async def pre_execute_setup(self) -> None:
         """Setup before crawling begins."""

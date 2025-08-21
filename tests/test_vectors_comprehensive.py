@@ -212,7 +212,7 @@ class TestVectorServiceComprehensive:
 
                 query_vector = [0.1, 0.2, 0.3] * 128
                 results = await service.search_similar(
-                    query_vector, limit=10, score_threshold=0.7
+                    query_vector, limit=10, min_score=0.7
                 )
 
                 assert len(results) == 1

@@ -114,7 +114,7 @@ class TestRagServiceIntegration:
             query="FastMCP testing capabilities",
             sources=["https://example.com/query-test"],
             limit=5,
-            score_threshold=0.1,
+            min_score=0.1,
         )
 
         result = await rag_service.query(query)
@@ -347,7 +347,7 @@ class TestRagErrorHandling:
         query = RagQuery(
             query="completely unrelated nonsensical query that should match nothing",
             limit=5,
-            score_threshold=0.9,  # High threshold
+            min_score=0.9,  # High threshold
         )
 
         result = await rag_service.query(query)
@@ -398,9 +398,7 @@ class TestRagAdvancedFeatures:
         await rag_service.process_crawl_result(crawl_result)
 
         # Query to test reranking
-        query = RagQuery(
-            query="FastMCP testing practices", limit=3, score_threshold=0.0
-        )
+        query = RagQuery(query="FastMCP testing practices", limit=3, min_score=0.0)
 
         result = await rag_service.query(query)
 

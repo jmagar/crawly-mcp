@@ -421,7 +421,7 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
         )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # Process files in parallel using all available threads
             tasks = [
@@ -435,9 +435,9 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Filter and return results
-            processed_results = []
+            processed_results: list[PageContent | Exception] = []
             for result in results:
-                if isinstance(result, PageContent | Exception):
+                if isinstance(result, (PageContent, Exception)):
                     processed_results.append(result)
                 else:
                     # Handle any unexpected return types

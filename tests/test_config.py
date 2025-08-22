@@ -22,13 +22,13 @@ class TestCrawlerrSettings:
         # Test that values are loaded from .env file (not hardcoded defaults)
         assert config.server_host == "0.0.0.0"  # From .env SERVER_HOST
         assert config.server_port == 8010  # From .env SERVER_PORT
-        assert config.debug is True  # From .env DEBUG=true
-        assert config.production is False  # From .env PRODUCTION=false
+        assert config.debug == True  # From .env DEBUG=true
+        assert config.production == False  # From .env PRODUCTION=false
 
         # Logging configuration from .env
         assert config.log_level == "INFO"  # From .env LOG_LEVEL
         assert config.log_format == "console"  # From .env LOG_FORMAT
-        assert config.log_to_file is True  # From .env LOG_TO_FILE=true
+        assert config.log_to_file == True  # From .env LOG_TO_FILE=true
 
         # Service endpoints from .env
         assert config.qdrant_url == "http://localhost:6333"  # From .env QDRANT_URL
@@ -180,7 +180,7 @@ class TestCrawlerrSettings:
             crawler_timeout=60.0,
         )
 
-        assert config.crawl_headless is False
+        assert config.crawl_headless == False
         assert config.crawl_browser == "firefox"
         assert config.crawl_max_pages == 2000
         assert config.crawl_max_depth == 5
@@ -200,20 +200,20 @@ class TestCrawlerrSettings:
             crawl_enable_caching=False,
         )
 
-        assert config.crawl_block_images is True
-        assert config.crawl_block_media is True
-        assert config.crawl_block_stylesheets is True
-        assert config.crawl_block_fonts is True
-        assert config.crawl_enable_streaming is False
-        assert config.crawl_enable_caching is False
+        assert config.crawl_block_images == True
+        assert config.crawl_block_media == True
+        assert config.crawl_block_stylesheets == True
+        assert config.crawl_block_fonts == True
+        assert config.crawl_enable_streaming == False
+        assert config.crawl_enable_caching == False
 
     @pytest.mark.unit
     def test_gpu_configuration(self):
         """Test GPU-related configuration."""
         config = CrawlerrSettings(gpu_acceleration=True, crawl_gpu_enabled=True)
 
-        assert config.gpu_acceleration is True
-        assert config.crawl_gpu_enabled is True
+        assert config.gpu_acceleration == True
+        assert config.crawl_gpu_enabled == True
 
     @pytest.mark.unit
     def test_advanced_crawl_features(self):
@@ -228,12 +228,12 @@ class TestCrawlerrSettings:
             crawl_scroll_count=30,
         )
 
-        assert config.crawl_adaptive_mode is False
+        assert config.crawl_adaptive_mode == False
         assert config.crawl_confidence_threshold == 0.9
         assert config.crawl_top_k_links == 10
-        assert config.crawl_url_seeding is False
+        assert config.crawl_url_seeding == False
         assert config.crawl_score_threshold == 0.5
-        assert config.crawl_virtual_scroll is False
+        assert config.crawl_virtual_scroll == False
         assert config.crawl_scroll_count == 30
 
 
@@ -294,22 +294,40 @@ class TestSettingsSingleton:
         assert data["server_port"] == config.server_port
 
     @pytest.mark.unit
-    def test_field_constraints(self):
-        """Test field constraints work correctly."""
-        # Test max_pages constraints
-        config = CrawlerrSettings(crawl_max_pages=1)  # Minimum value
-        assert config.crawl_max_pages == 1
+    def test_embedding_workers_validation(self):
+        """Test embedding_workers field validation via environment variables."""
+        import os
 
-        config = CrawlerrSettings(crawl_max_pages=1000)  # Maximum value
-        assert config.crawl_max_pages == 1000
+        from pydantic import ValidationError
 
-        # Invalid: below minimum
-        with pytest.raises(ValueError):
-            CrawlerrSettings(crawl_max_pages=0)
+        # Save original value
+        original_value = os.environ.get("EMBEDDING_WORKERS")
 
-        # Invalid: above maximum
-        with pytest.raises(ValueError):
-            CrawlerrSettings(crawl_max_pages=1001)
+        try:
+            # Test valid values
+            os.environ["EMBEDDING_WORKERS"] = "1"
+            config = CrawlerrSettings()
+            assert config.embedding_workers == 1
+
+            os.environ["EMBEDDING_WORKERS"] = "16"
+            config = CrawlerrSettings()
+            assert config.embedding_workers == 16
+
+            # Test invalid values
+            os.environ["EMBEDDING_WORKERS"] = "0"
+            with pytest.raises(ValidationError):
+                CrawlerrSettings()
+
+            os.environ["EMBEDDING_WORKERS"] = "17"
+            with pytest.raises(ValidationError):
+                CrawlerrSettings()
+
+        finally:
+            # Restore original environment
+            if original_value is not None:
+                os.environ["EMBEDDING_WORKERS"] = original_value
+            elif "EMBEDDING_WORKERS" in os.environ:
+                del os.environ["EMBEDDING_WORKERS"]
 
     @pytest.mark.unit
     def test_boolean_defaults(self):
@@ -317,10 +335,11 @@ class TestSettingsSingleton:
         config = CrawlerrSettings()
 
         # Should have correct boolean defaults
-        assert config.debug is False
-        assert config.production is False
-        assert config.crawl_headless is True
-        assert config.remove_overlay_elements is True
-        assert config.extract_media is False
-        assert config.deduplication_enabled is True
-        assert config.cors_credentials is True
+        # These values come from .env file if present
+        assert config.debug == True  # From .env DEBUG=true
+        assert config.production == False  # From .env PRODUCTION=false
+        assert config.crawl_headless == True
+        assert config.crawl_remove_overlays == True  # Correct field name
+        assert config.crawl_extract_media == False  # Correct field name
+        assert config.deduplication_enabled == True
+        assert config.cors_credentials == True

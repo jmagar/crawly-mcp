@@ -79,7 +79,7 @@ fastmcp dev crawler_mcp/server.py
 uv run python -m crawler_mcp.server
 ```
 
-The server will be available at `http://localhost:8000` with MCP over HTTP transport.
+The server will be available at `http://localhost:8010` (or the value of `SERVER_PORT`) with MCP over HTTP transport.
 
 ## 🛠️ Core Tools
 
@@ -238,7 +238,7 @@ graph TB
 ### Environment Variables
 ```bash
 # Vector Database
-QDRANT_URL=http://localhost:6333
+QDRANT_URL=http://localhost:7000
 QDRANT_COLLECTION=crawlerr_documents
 
 # Text Embeddings Inference
@@ -259,7 +259,7 @@ CHUNK_OVERLAP=200
 
 # Server Configuration
 SERVER_HOST=127.0.0.1
-SERVER_PORT=8000
+SERVER_PORT=8010
 LOG_LEVEL=INFO
 ```
 
@@ -354,7 +354,7 @@ The included `docker-compose.yml` provides production-ready services:
 ### Qdrant Vector Database
 - Persistent storage with health checks
 - Optimized for vector similarity search
-- REST API on port 6333
+- REST API on port 7000
 
 ### HF Text Embeddings Inference
 - GPU-accelerated Qwen3-Embedding-0.6B

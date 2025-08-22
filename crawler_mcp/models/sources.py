@@ -55,8 +55,8 @@ class SourceInfo(BaseModel):
     title: str | None = None
     source_type: SourceType
     status: str = "active"  # active, inactive, error
-    chunk_count: int = 0
-    total_content_length: int = 0
+    chunk_count: int = Field(default=0, ge=0)
+    total_content_length: int = Field(default=0, ge=0)
     metadata: SourceMetadata = Field(default_factory=SourceMetadata)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

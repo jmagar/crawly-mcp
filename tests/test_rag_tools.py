@@ -286,5 +286,5 @@ class TestRagTools:
         search_metadata = result.data.get("search_metadata", {})
         if "search_time_ms" in search_metadata:
             search_time_ms = search_metadata["search_time_ms"]
-            assert isinstance(search_time_ms, (int, float))
+            assert isinstance(search_time_ms, int | float)
             assert search_time_ms > 0

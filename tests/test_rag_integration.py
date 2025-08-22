@@ -112,7 +112,7 @@ class TestRagServiceIntegration:
         # Query for the content
         query = RagQuery(
             query="FastMCP testing capabilities",
-            sources=["https://example.com/query-test"],
+            source_filters=["https://example.com/query-test"],
             limit=5,
             min_score=0.1,
         )

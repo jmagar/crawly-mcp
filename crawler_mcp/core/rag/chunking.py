@@ -6,6 +6,7 @@ into optimal chunks for embedding generation and vector search.
 """
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -15,9 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Approximate word-to-token ratio for different tokenizers
 WORD_TO_TOKEN_RATIO = 1.3  # General estimate for English text
-QWEN3_WORD_TO_TOKEN_RATIO = (
-    1.4  # More accurate for Qwen3 tokenizer based on empirical testing
-)
+QWEN3_WORD_TO_TOKEN_RATIO = 1.4  # Qwen3 tokenizer ratio
 
 
 def find_paragraph_boundary(search_text: str, ideal_end: int) -> int | None:
@@ -68,22 +67,30 @@ class TokenCounter:
 
     def __init__(self):
         self.tokenizer = None
-        self.tokenizer_type = "character"  # Default tokenizer type
-        self.word_to_token_ratio = settings.word_to_token_ratio
+        self.tokenizer_type = "word-estimate"  # Default to word estimation
+        self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO  # Use Qwen3's ratio (1.4)
 
-        # Initialize tokenizer
+        # Initialize Qwen3 tokenizer to match embedding service
         try:
-            import tiktoken
+            from transformers import AutoTokenizer
 
-            self.tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
-            self.tokenizer_type = "tiktoken"
+            # Use the same model as your embedding service
+            model_name = getattr(settings, "tei_model", "Qwen/Qwen3-Embedding-0.6B")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.tokenizer_type = "qwen3"
+            logger.info(f"Initialized Qwen3 tokenizer from {model_name}")
         except ImportError:
-            logger.warning("tiktoken not available, using character-based chunking")
-            self.tokenizer_type = "character"
+            logger.info(
+                "transformers not available (install with [ml] extra); using word-based estimation"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to load Qwen3 tokenizer: {e}; using word-based estimation"
+            )
 
     def count_tokens(self, text: str) -> int:
         """
-        Calculate accurate token count using actual tokenizer when available.
+        Count tokens using Qwen3 tokenizer or word-based estimation.
 
         Args:
             text: Text to count tokens for
@@ -91,17 +98,21 @@ class TokenCounter:
         Returns:
             Accurate token count
         """
-        if self.tokenizer:
+        if not text.strip():
+            return 0
+
+        if self.tokenizer and self.tokenizer_type == "qwen3":
             try:
-                # Use actual tokenizer for precise count
-                tokens = self.tokenizer.encode(text)
+                # Use Qwen3 tokenizer for accurate count
+                tokens = self.tokenizer.encode(text, add_special_tokens=False)
                 return len(tokens)
             except Exception as e:
-                logger.debug(f"Tokenizer failed, falling back to estimation: {e}")
+                logger.warning(
+                    f"Qwen3 tokenizer failed: {e}, falling back to estimation"
+                )
 
-        # Fallback to word-based estimation with configurable ratio
-        word_count = len(text.split())
-        return int(word_count * self.word_to_token_ratio)
+        # Fallback to word-based estimation using Qwen3's ratio
+        return self.estimate_tokens_from_words(text)
 
     def estimate_tokens_from_words(self, text: str) -> int:
         """Estimate token count from word count."""
@@ -126,6 +137,20 @@ class ChunkingStrategy(ABC):
     """Base class for text chunking strategies."""
 
     def __init__(self, chunk_size: int = 1000, overlap: int = 100):
+        # Validate chunk_size
+        if not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError("chunk_size must be a positive integer")
+
+        # Validate overlap
+        if not isinstance(overlap, int) or overlap < 0:
+            raise ValueError("overlap must be a non-negative integer")
+
+        # Validate relationship between chunk_size and overlap
+        if overlap >= chunk_size:
+            raise ValueError(
+                f"overlap ({overlap}) must be less than chunk_size ({chunk_size})"
+            )
+
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.token_counter = TokenCounter()
@@ -146,9 +171,35 @@ class ChunkingStrategy(ABC):
         """
         pass
 
+    def get_chunk_metric(self) -> str:
+        """Get the metric used for chunk size (characters or tokens)."""
+        return "characters"  # Default to characters
+
+    def measure_chunk(self, chunk: str) -> int:
+        """Measure chunk size using the appropriate metric."""
+        return len(chunk)  # Default to character count
+
+    def get_min_chunk_size(self) -> int:
+        """Get minimum allowed chunk size in the appropriate metric."""
+        return 50  # Default minimum characters
+
     def validate_chunk_size(self, chunk: str) -> bool:
-        """Validate if chunk size is within acceptable limits."""
-        return len(chunk) > 50 and len(chunk) <= self.chunk_size * 2
+        """
+        Validate if chunk size is within acceptable limits.
+
+        Uses strategy-appropriate validation based on the chunk metric.
+
+        Args:
+            chunk: Text chunk to validate
+
+        Returns:
+            True if chunk size is valid, False otherwise
+        """
+        actual_size = self.measure_chunk(chunk)
+        min_size = self.get_min_chunk_size()
+        max_size = self.chunk_size * 2  # Maximum is double the target
+
+        return min_size < actual_size <= max_size
 
     def assess_chunk_quality(
         self, chunk: str, metadata: dict[str, Any] | None = None
@@ -231,23 +282,30 @@ class FixedSizeChunker(ChunkingStrategy):
         while start < text_length:
             end = start + self.chunk_size
 
-            # Find a good break point (end of sentence or paragraph)
+            # Find a good break point using boundary detection helpers
             if end < text_length:
-                # Look for sentence endings within the last 100 characters
-                search_start = max(start + self.chunk_size - 100, start)
-                sentence_ends = []
+                # Get search window for boundary detection
+                search_start = max(start, end - 100)
+                search_end = min(text_length, end + 100)
+                search_text = text[search_start:search_end]
+                relative_ideal = end - search_start
 
-                for i in range(search_start, min(end + 50, text_length)):
-                    if (
-                        text[i] in ".!?"
-                        and i + 1 < text_length
-                        and text[i + 1] in " \n\t"
-                    ):
-                        sentence_ends.append(i + 1)
-
-                # Use the last sentence end if found, otherwise stick to character limit
-                if sentence_ends:
-                    end = sentence_ends[-1]
+                # Try different boundary types in order of preference
+                boundary = find_paragraph_boundary(search_text, relative_ideal)
+                if boundary is not None:
+                    end = search_start + boundary
+                else:
+                    boundary = find_sentence_boundary(search_text, relative_ideal)
+                    if boundary is not None:
+                        end = search_start + boundary
+                    else:
+                        boundary = find_line_boundary(search_text, relative_ideal)
+                        if boundary is not None:
+                            end = search_start + boundary
+                        else:
+                            boundary = find_word_boundary(search_text, relative_ideal)
+                            if boundary is not None:
+                                end = search_start + boundary
 
             chunk_text = text[start:end].strip()
 
@@ -265,18 +323,26 @@ class FixedSizeChunker(ChunkingStrategy):
                 chunks.append(chunk)
                 chunk_index += 1
 
-            # Move start position with overlap
-            start = max(start + self.chunk_size - self.overlap, end)
-
-            # Prevent infinite loop
-            if start <= end - self.chunk_size:
-                start = end
+            # Move start from actual end to preserve overlap
+            start = max(0, end - self.overlap)
 
         return chunks
 
 
 class TokenBasedChunker(ChunkingStrategy):
     """Token-based chunking using actual tokenizer for optimal semantic boundaries."""
+
+    def get_chunk_metric(self) -> str:
+        """Get the metric used for chunk size."""
+        return "tokens"
+
+    def measure_chunk(self, chunk: str) -> int:
+        """Measure chunk size in tokens."""
+        return self.token_counter.count_tokens(chunk)
+
+    def get_min_chunk_size(self) -> int:
+        """Get minimum allowed chunk size in tokens."""
+        return 10  # Minimum tokens
 
     def chunk_text(
         self, text: str, metadata: dict[str, Any] | None = None
@@ -287,8 +353,16 @@ class TokenBasedChunker(ChunkingStrategy):
         chunks = []
 
         if self.token_counter.tokenizer:
-            # Use actual tokenizer
-            tokens = self.token_counter.tokenizer.encode(text)
+            # Use actual tokenizer (Qwen3 or fallback)
+            if self.token_counter.tokenizer_type == "qwen3":
+                # Qwen3 tokenizer from transformers
+                tokens = self.token_counter.tokenizer.encode(
+                    text, add_special_tokens=False
+                )
+            else:
+                # Other tokenizers (e.g., tiktoken if available)
+                tokens = self.token_counter.tokenizer.encode(text)
+
             total_tokens = len(tokens)
             start_token = 0
             chunk_index = 0
@@ -299,18 +373,13 @@ class TokenBasedChunker(ChunkingStrategy):
                 # Extract token chunk
                 chunk_tokens = tokens[start_token:end_token]
 
-                # Ensure chunk_tokens is a flat list of integers
-                if (
-                    isinstance(chunk_tokens, list)
-                    and len(chunk_tokens) > 0
-                    and isinstance(chunk_tokens[0], list)
-                ):
-                    # Flatten nested list
-                    chunk_tokens = [
-                        token for sublist in chunk_tokens for token in sublist
-                    ]
-
-                chunk_text = self.token_counter.tokenizer.decode(chunk_tokens)
+                # Decode based on tokenizer type
+                if self.token_counter.tokenizer_type == "qwen3":
+                    chunk_text = self.token_counter.tokenizer.decode(
+                        chunk_tokens, skip_special_tokens=True
+                    )
+                else:
+                    chunk_text = self.token_counter.tokenizer.decode(chunk_tokens)
 
                 if chunk_text.strip():
                     chunk = {
@@ -328,18 +397,21 @@ class TokenBasedChunker(ChunkingStrategy):
                     chunks.append(chunk)
                     chunk_index += 1
 
-                # Move start position with overlap
-                start_token = max(
-                    start_token + self.chunk_size - self.overlap, end_token
-                )
-
-                # Prevent infinite loop
-                if start_token <= end_token - self.chunk_size:
-                    start_token = end_token
+                # Advance window maintaining stable overlap
+                # Ensure we advance by at least 1 token to avoid infinite loop
+                next_start = end_token - self.overlap
+                start_token = max(start_token + 1, min(next_start, total_tokens))
         else:
             # Fallback to approximate token-based chunking using word estimation
-            words = text.split()
-            total_words = len(words)
+            # Build word position map to track actual character offsets
+            word_pattern = re.compile(r"\S+")
+            word_positions = []
+            for match in word_pattern.finditer(text):
+                word_positions.append(
+                    {"word": match.group(), "start": match.start(), "end": match.end()}
+                )
+
+            total_words = len(word_positions)
             # Use configurable word-to-token ratio for accuracy
             approx_tokens_per_word = self.token_counter.word_to_token_ratio
             chunk_size_words = int(self.chunk_size / approx_tokens_per_word)
@@ -350,16 +422,20 @@ class TokenBasedChunker(ChunkingStrategy):
 
             while start_word < total_words:
                 end_word = min(start_word + chunk_size_words, total_words)
-                chunk_words = words[start_word:end_word]
-                chunk_text = " ".join(chunk_words)
+
+                if start_word >= total_words:
+                    break
+
+                # Extract chunk using actual positions from original text
+                text_start_pos = word_positions[start_word]["start"]
+                text_end_pos = (
+                    word_positions[end_word - 1]["end"] if end_word > 0 else 0
+                )
+                chunk_text = text[text_start_pos:text_end_pos]
+                chunk_words = [wp["word"] for wp in word_positions[start_word:end_word]]
 
                 if chunk_text.strip():
                     estimated_tokens = int(len(chunk_words) * approx_tokens_per_word)
-                    # Calculate character positions for consistency
-                    text_start_pos = len(" ".join(words[:start_word])) + (
-                        1 if start_word > 0 else 0
-                    )
-                    text_end_pos = text_start_pos + len(chunk_text)
 
                     chunk = {
                         "text": chunk_text,
@@ -376,14 +452,8 @@ class TokenBasedChunker(ChunkingStrategy):
                     chunks.append(chunk)
                     chunk_index += 1
 
-                # Move start position with overlap
-                start_word = max(
-                    start_word + chunk_size_words - overlap_words, end_word
-                )
-
-                # Prevent infinite loop
-                if start_word <= end_word - chunk_size_words:
-                    start_word = end_word
+                # Move start from actual end to preserve overlap
+                start_word = max(0, end_word - overlap_words)
 
         return chunks
 
@@ -407,48 +477,51 @@ class SemanticChunker(ChunkingStrategy):
         for paragraph in paragraphs:
             # If adding this paragraph would exceed chunk size, finalize current chunk
             if current_chunk and len(current_chunk) + len(paragraph) > self.chunk_size:
-                if current_chunk.strip():
+                trimmed_text = current_chunk.strip()
+                if trimmed_text:
                     chunk = {
-                        "text": current_chunk.strip(),
+                        "text": trimmed_text,
                         "chunk_index": chunk_index,
                         "start_pos": start_pos,
-                        "end_pos": start_pos + len(current_chunk),
-                        "word_count": len(current_chunk.split()),
-                        "char_count": len(current_chunk),
+                        "end_pos": start_pos + len(trimmed_text),
+                        "word_count": len(trimmed_text.split()),
+                        "char_count": len(trimmed_text),
                         "token_count_estimate": self.token_counter.count_tokens(
-                            current_chunk
+                            trimmed_text
                         ),
                         **(metadata or {}),
                     }
                     chunks.append(chunk)
                     chunk_index += 1
 
+                # Capture the previous chunk length before mutation
+                prev_len = len(current_chunk)
+
                 # Start new chunk with overlap
                 if self.overlap > 0:
-                    overlap_text = current_chunk[-self.overlap :]
+                    # Guard overlap slicing when prev_len is smaller than configured overlap
+                    overlap_text = current_chunk[-min(self.overlap, prev_len) :]
                     current_chunk = overlap_text + paragraph
-                    start_pos = (
-                        start_pos
-                        + len(current_chunk)
-                        - len(overlap_text)
-                        - len(paragraph)
-                    )
+                    # Compute start_pos from the captured prev_len
+                    start_pos = start_pos + (prev_len - len(overlap_text))
                 else:
                     current_chunk = paragraph
-                    start_pos = start_pos + len(current_chunk)
+                    # Move start_pos by the full prev_len when no overlap
+                    start_pos = start_pos + prev_len
             else:
                 current_chunk += paragraph
 
         # Add final chunk
-        if current_chunk.strip():
+        trimmed_text = current_chunk.strip()
+        if trimmed_text:
             chunk = {
-                "text": current_chunk.strip(),
+                "text": trimmed_text,
                 "chunk_index": chunk_index,
                 "start_pos": start_pos,
-                "end_pos": start_pos + len(current_chunk),
-                "word_count": len(current_chunk.split()),
-                "char_count": len(current_chunk),
-                "token_count_estimate": self.token_counter.count_tokens(current_chunk),
+                "end_pos": start_pos + len(trimmed_text),
+                "word_count": len(trimmed_text.split()),
+                "char_count": len(trimmed_text),
+                "token_count_estimate": self.token_counter.count_tokens(trimmed_text),
                 **(metadata or {}),
             }
             chunks.append(chunk)
@@ -456,21 +529,27 @@ class SemanticChunker(ChunkingStrategy):
         return chunks
 
     def find_semantic_boundaries(self, text: str) -> list[int]:
-        """Find semantic boundaries in text."""
+        """Find semantic boundaries in text using helper functions."""
         boundaries = []
+        text_length = len(text)
 
-        # Find paragraph boundaries
-        for i, _char in enumerate(text):
-            if i < len(text) - 1 and text[i : i + 2] == "\n\n":
-                boundaries.append(i)
+        # Check every N characters for potential boundaries
+        step = min(100, self.chunk_size // 10)
+        for pos in range(step, text_length, step):
+            # Try to find a boundary near this position
+            search_start = max(0, pos - 50)
+            search_end = min(text_length, pos + 50)
+            search_text = text[search_start:search_end]
+            relative_pos = pos - search_start
 
-        # Find sentence boundaries if no paragraphs
-        if not boundaries:
-            sentence_patterns = [". ", "! ", "? ", ".\n", "!\n", "?\n"]
-            for pattern in sentence_patterns:
-                for i in range(len(text) - len(pattern)):
-                    if text[i : i + len(pattern)] == pattern:
-                        boundaries.append(i + len(pattern))
+            # Try paragraph boundary first
+            boundary = find_paragraph_boundary(search_text, relative_pos)
+            if boundary is not None:
+                boundaries.append(search_start + boundary)
+            elif pos % (step * 2) == 0:  # Check sentence boundaries less frequently
+                boundary = find_sentence_boundary(search_text, relative_pos)
+                if boundary is not None:
+                    boundaries.append(search_start + boundary)
 
         return sorted(set(boundaries))
 
@@ -549,22 +628,35 @@ class AdaptiveChunker(ChunkingStrategy):
         chunk_index = 0
         start_line = 0
 
+        # Build cumulative character position map for lines
+        line_char_positions = [0]  # Start position of each line
+        char_pos = 0
+        for line in lines:
+            char_pos += len(line) + 1  # +1 for newline
+            line_char_positions.append(char_pos)
+
+        # Track character position for current chunk start
+        char_start_pos = 0
+
         for i, line in enumerate(lines):
             # Check if we're starting a new function/class and current chunk is getting large
+            trimmed_text = current_chunk.strip()
             if (
                 any(keyword in line for keyword in ["def ", "class ", "function "])
                 and len(current_chunk) > self.chunk_size * 0.8
-                and current_chunk.strip()
+                and trimmed_text
             ):
                 chunk = {
-                    "text": current_chunk.strip(),
+                    "text": trimmed_text,
                     "chunk_index": chunk_index,
-                    "start_pos": start_line,
-                    "end_pos": i,
-                    "word_count": len(current_chunk.split()),
-                    "char_count": len(current_chunk),
+                    "start_pos": char_start_pos,  # Character offset
+                    "end_pos": char_start_pos + len(trimmed_text),  # Character offset
+                    "start_line": start_line,  # Line index for backward compat
+                    "end_line": i,  # Line index for backward compat
+                    "word_count": len(trimmed_text.split()),
+                    "char_count": len(trimmed_text),
                     "token_count_estimate": self.token_counter.count_tokens(
-                        current_chunk
+                        trimmed_text
                     ),
                     "content_type": "code",
                     **(metadata or {}),
@@ -573,20 +665,26 @@ class AdaptiveChunker(ChunkingStrategy):
                 chunk_index += 1
                 current_chunk = ""
                 start_line = i
+                char_start_pos = (
+                    line_char_positions[i] if i < len(line_char_positions) else char_pos
+                )
 
             current_chunk += line + "\n"
 
             # Force split if chunk gets too large
-            if len(current_chunk) > self.chunk_size * 1.5 and current_chunk.strip():
+            trimmed_text = current_chunk.strip()
+            if len(current_chunk) > self.chunk_size * 1.5 and trimmed_text:
                 chunk = {
-                    "text": current_chunk.strip(),
+                    "text": trimmed_text,
                     "chunk_index": chunk_index,
-                    "start_pos": start_line,
-                    "end_pos": i + 1,
-                    "word_count": len(current_chunk.split()),
-                    "char_count": len(current_chunk),
+                    "start_pos": char_start_pos,  # Character offset
+                    "end_pos": char_start_pos + len(trimmed_text),  # Character offset
+                    "start_line": start_line,  # Line index for backward compat
+                    "end_line": i + 1,  # Line index for backward compat
+                    "word_count": len(trimmed_text.split()),
+                    "char_count": len(trimmed_text),
                     "token_count_estimate": self.token_counter.count_tokens(
-                        current_chunk
+                        trimmed_text
                     ),
                     "content_type": "code",
                     **(metadata or {}),
@@ -595,17 +693,25 @@ class AdaptiveChunker(ChunkingStrategy):
                 chunk_index += 1
                 current_chunk = ""
                 start_line = i + 1
+                char_start_pos = (
+                    line_char_positions[min(i + 1, len(lines))]
+                    if (i + 1) < len(line_char_positions)
+                    else char_pos
+                )
 
         # Add final chunk
-        if current_chunk.strip():
+        trimmed_text = current_chunk.strip()
+        if trimmed_text:
             chunk = {
-                "text": current_chunk.strip(),
+                "text": trimmed_text,
                 "chunk_index": chunk_index,
-                "start_pos": start_line,
-                "end_pos": len(lines),
-                "word_count": len(current_chunk.split()),
-                "char_count": len(current_chunk),
-                "token_count_estimate": self.token_counter.count_tokens(current_chunk),
+                "start_pos": char_start_pos,  # Character offset
+                "end_pos": char_start_pos + len(trimmed_text),  # Character offset
+                "start_line": start_line,  # Line index for backward compat
+                "end_line": len(lines),  # Line index for backward compat
+                "word_count": len(trimmed_text.split()),
+                "char_count": len(trimmed_text),
+                "token_count_estimate": self.token_counter.count_tokens(trimmed_text),
                 "content_type": "code",
                 **(metadata or {}),
             }

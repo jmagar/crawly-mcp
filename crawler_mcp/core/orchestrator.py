@@ -259,36 +259,89 @@ class CrawlerService:
             await browser.start()
 
         try:
-            # Create content filter for fit markdown generation
-            content_filter = PruningContentFilter(
-                threshold=0.45,  # Prune nodes below 45% relevance score
-                threshold_type="dynamic",  # Dynamic scoring
-                min_word_threshold=5,  # Ignore very short text blocks
-            )
+            # Configure extraction strategy
+            if extraction_strategy == "aggressive":
+                # Aggressive pruning for cleaner content
+                content_filter = PruningContentFilter(
+                    threshold=0.6,  # Higher threshold for more aggressive pruning
+                    threshold_type="dynamic",
+                    min_word_threshold=10,  # Ignore shorter text blocks
+                )
+            elif extraction_strategy == "minimal":
+                # Minimal pruning to preserve more content
+                content_filter = PruningContentFilter(
+                    threshold=0.3,  # Lower threshold for less pruning
+                    threshold_type="dynamic",
+                    min_word_threshold=3,  # Keep even short text
+                )
+            else:
+                # Default balanced strategy
+                content_filter = PruningContentFilter(
+                    threshold=0.45,  # Prune nodes below 45% relevance score
+                    threshold_type="dynamic",  # Dynamic scoring
+                    min_word_threshold=5,  # Ignore very short text blocks
+                )
 
             # Create markdown generator with content filter
             markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
 
+            # Configure crawl parameters
+            crawl_kwargs = {
+                "url": url,
+                "bypass_cache": not settings.crawl_enable_caching,
+                "process_iframes": False,  # Disable for performance
+                "remove_overlay_elements": settings.crawl_remove_overlays,
+                "word_count_threshold": settings.crawl_min_words,
+                # Optimize for clean markdown extraction
+                "excluded_tags": [
+                    "nav",
+                    "footer",
+                    "header",
+                    "aside",
+                    "script",
+                    "style",
+                ],
+                "exclude_external_links": True,
+                "markdown_generator": markdown_generator,  # Enable fit markdown generation
+            }
+
+            # Apply virtual scrolling configuration if requested
+            if use_virtual_scroll:
+                crawl_kwargs["scroll_behavior"] = "smooth"
+                crawl_kwargs["wait_for_network_idle"] = True
+
+                if virtual_scroll_config:
+                    # Apply custom virtual scroll settings
+                    if "scroll_count" in virtual_scroll_config:
+                        crawl_kwargs["page_timeout"] = (
+                            virtual_scroll_config["scroll_count"] * 1000
+                        )
+                    if "scroll_delay" in virtual_scroll_config:
+                        crawl_kwargs["delay_after_scroll"] = virtual_scroll_config[
+                            "scroll_delay"
+                        ]
+                else:
+                    # Use default virtual scroll settings from config
+                    if (
+                        hasattr(settings, "crawl_virtual_scroll")
+                        and settings.crawl_virtual_scroll
+                    ):
+                        crawl_kwargs["page_timeout"] = (
+                            settings.crawl_scroll_count * 1000
+                        )
+                        crawl_kwargs["delay_after_scroll"] = settings.crawl_scroll_delay
+
+            # Apply wait_for condition if specified
+            if wait_for:
+                crawl_kwargs["wait_for"] = wait_for
+
+            # Apply custom configuration overrides
+            if custom_config:
+                crawl_kwargs.update(custom_config)
+
             # Use Crawl4AI to scrape the page with fit markdown optimization
             with suppress_stdout():
-                result = await browser.arun(
-                    url=url,
-                    bypass_cache=not settings.crawl_enable_caching,
-                    process_iframes=False,  # Disable for performance
-                    remove_overlay_elements=settings.crawl_remove_overlays,
-                    word_count_threshold=settings.crawl_min_words,
-                    # Optimize for clean markdown extraction
-                    excluded_tags=[
-                        "nav",
-                        "footer",
-                        "header",
-                        "aside",
-                        "script",
-                        "style",
-                    ],
-                    exclude_external_links=True,
-                    markdown_generator=markdown_generator,  # Enable fit markdown generation
-                )
+                result = await browser.arun(**crawl_kwargs)
 
             if not result.success:
                 raise Exception(f"Scraping failed: {result.error_message}")
@@ -382,13 +435,14 @@ class CrawlerService:
                 if result.media
                 else [],
                 metadata={
-                    "extraction_strategy": extraction_strategy,
-                    "word_count": len(best_content.split()) if best_content else 0,
+                    "extraction_strategy": extraction_strategy or "default",
+                    "virtual_scroll_used": use_virtual_scroll,
+                    "wait_for_condition": wait_for,
                     "status_code": result.status_code,
                     "response_headers": dict(result.response_headers or {}),
                 },
-                timestamp=datetime.fromtimestamp(time.time()),
-                word_count=len(best_content.split()) if best_content else 0,
+                timestamp=datetime.utcnow(),
+                # word_count will be calculated by the validator
             )
 
             return page_content

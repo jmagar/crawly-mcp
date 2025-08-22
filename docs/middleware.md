@@ -3,25 +3,25 @@
 > Add cross-cutting functionality to your MCP server with middleware that can inspect, modify, and respond to all MCP requests and responses.
 
 export const VersionBadge = ({version}) => {
-  return <code className="version-badge-container">
-            <p className="version-badge">
+  return <div className="version-badge-container">
+            <span className="version-badge">
                 <span className="version-badge-label">New in version:</span>
                 <code className="version-badge-version">{version}</code>
-            </p>
-        </code>;
+            </span>
+        </div>;
 };
 
 <VersionBadge version="2.9.0" />
 
 MCP middleware is a powerful concept that allows you to add cross-cutting functionality to your FastMCP server. Unlike traditional web middleware, MCP middleware is designed specifically for the Model Context Protocol, providing hooks for different types of MCP operations like tool calls, resource reads, and prompt requests.
 
-<Tip>
-  MCP middleware is a FastMCP-specific concept and is not part of the official MCP protocol specification. This middleware system is designed to work with FastMCP servers and may not be compatible with other MCP implementations.
-</Tip>
+:::tip
+MCP middleware is a FastMCP-specific concept and is not part of the official MCP protocol specification. This middleware system is designed to work with FastMCP servers and may not be compatible with other MCP implementations.
+:::
 
-<Warning>
-  MCP middleware is a brand new concept and may be subject to breaking changes in future versions.
-</Warning>
+:::warning
+MCP middleware is a brand new concept and may be subject to breaking changes in future versions.
+:::
 
 ## What is MCP Middleware?
 
@@ -209,9 +209,9 @@ class ListingFilterMiddleware(Middleware):
 
 This filtering happens before the components are converted to MCP format and returned to the client. Tags are accessible both during filtering and are included in the component's `meta` field in the final listing response.
 
-<Tip>
-  When filtering components in listing operations, ensure you also prevent execution of filtered components in the corresponding execution hooks (`on_call_tool`, `on_read_resource`, `on_get_prompt`) to maintain consistency.
-</Tip>
+:::tip
+When filtering components in listing operations, ensure you also prevent execution of filtered components in the corresponding execution hooks (`on_call_tool`, `on_read_resource`, `on_get_prompt`) to maintain consistency.
+:::
 
 ### Tool Call Denial
 
@@ -233,13 +233,15 @@ class AuthMiddleware(Middleware):
         return await call_next(context)
 ```
 
-<Warning>
-  When denying tool calls, always raise `ToolError` rather than returning `ToolResult` objects or other values. `ToolError` ensures proper error propagation through the middleware chain and converts to the correct MCP error response format.
-</Warning>
+:::warning
+When denying tool calls, always raise `ToolError` rather than returning `ToolResult` objects or other values. `ToolError` ensures proper error propagation through the middleware chain and converts to the correct MCP error response format.
+:::
 
 ### Tool Call Modification
 
 For execution operations like tool calls, you can modify arguments before execution or transform results afterward:
+
+**Note:** Middleware hooks may safely mutate `context.message` (including `.arguments`) and `call_next` will observe those mutations exactly once. Do not call `call_next` more than once per invocation.
 
 ```python
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -263,9 +265,9 @@ class ToolCallMiddleware(Middleware):
         return result
 ```
 
-<Tip>
-  For more complex tool rewriting scenarios, consider using [Tool Transformation](/patterns/tool-transformation) patterns which provide a more structured approach to creating modified tool variants.
-</Tip>
+:::tip
+For more complex tool rewriting scenarios, consider using [Tool Transformation](/patterns/tool-transformation) patterns which provide a more structured approach to creating modified tool variants.
+:::
 
 ### Anatomy of a Hook
 

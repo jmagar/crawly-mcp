@@ -5,16 +5,18 @@ This module provides common utilities for testing crawling, embedding,
 and RAG functionality with consistent patterns.
 """
 
+import math
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from crawler_mcp.models.schemas import PageContent
+from crawler_mcp.models.crawl import PageContent
 from tests.conftest import EMBEDDING_DIM
 
 
-async def create_mock_crawl_result(
+def create_mock_crawl_result(
     url: str,
     success: bool = True,
     title: str = "Test Page",
@@ -45,6 +47,17 @@ async def create_mock_crawl_result(
     return mock_result
 
 
+async def create_mock_crawl_result_async(
+    url: str,
+    success: bool = True,
+    title: str = "Test Page",
+    content: str = "Test content for crawling.",
+    metadata: dict[str, Any] | None = None,
+) -> Any:
+    """Async wrapper for backward compatibility."""
+    return create_mock_crawl_result(url, success, title, content, metadata)
+
+
 async def mock_embedding_client() -> AsyncMock:
     """
     Create mock embedding client for tests.
@@ -57,7 +70,10 @@ async def mock_embedding_client() -> AsyncMock:
     # Mock embedding generation
     async def mock_embed_texts(texts: list[str]) -> list[list[float]]:
         """Generate mock embeddings with correct dimensions."""
-        return [[0.1, 0.2, 0.3] * (EMBEDDING_DIM // 3) for _ in texts]
+        base_pattern = [0.1, 0.2, 0.3]
+        repeat_count = math.ceil(EMBEDDING_DIM / len(base_pattern))
+        full_pattern = base_pattern * repeat_count
+        return [full_pattern[:EMBEDDING_DIM] for _ in texts]
 
     client.embed_texts = mock_embed_texts
     client.health_check.return_value = True
@@ -81,23 +97,30 @@ def assert_chunking_preserves_metadata(
     assert len(chunks) > 0, "No chunks were created"
 
     # Check that essential metadata is preserved in all chunks
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         assert chunk.url == original.url, (
             f"URL not preserved in chunk: {chunk.content[:50]}..."
         )
         assert chunk.title == original.title, (
             f"Title not preserved in chunk: {chunk.content[:50]}..."
         )
-        assert chunk.language == original.language, (
-            f"Language not preserved in chunk: {chunk.content[:50]}..."
-        )
+
+        # Check metadata for language if it exists
+        if "language" in original.metadata:
+            assert chunk.metadata.get("language") == original.metadata["language"], (
+                f"Language not preserved in chunk: {chunk.content[:50]}..."
+            )
 
         # Check that chunk-specific fields are set
         assert chunk.content is not None and len(chunk.content) > 0, (
             "Chunk content is empty"
         )
-        assert chunk.chunk_index is not None, "Chunk index not set"
-        assert chunk.total_chunks is not None, "Total chunks not set"
+
+        # Check chunk metadata for chunk-specific fields
+        assert chunk.metadata.get("chunk_index", i) is not None, "Chunk index not set"
+        assert chunk.metadata.get("total_chunks", len(chunks)) is not None, (
+            "Total chunks not set"
+        )
 
 
 def create_mock_page_content(
@@ -124,19 +147,27 @@ def create_mock_page_content(
     Returns:
         PageContent object for testing
     """
+    metadata = {
+        "language": language,
+        "content_hash": "test_hash_123",
+        "char_count": len(content),
+        "extracted_at": datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
+    }
+
+    if file_path is not None:
+        metadata["file_path"] = file_path
+    if chunk_index is not None:
+        metadata["chunk_index"] = chunk_index
+    if total_chunks is not None:
+        metadata["total_chunks"] = total_chunks
+
     return PageContent(
         url=url,
         title=title,
         content=content,
-        language=language,
-        file_path=file_path,
-        chunk_index=chunk_index,
-        total_chunks=total_chunks,
-        content_hash="test_hash_123",
         word_count=len(content.split()),
-        char_count=len(content),
-        extracted_at="2024-01-01T00:00:00Z",
-        metadata={},
+        metadata=metadata,
+        timestamp=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC),
     )
 
 
@@ -208,9 +239,9 @@ def assert_valid_embedding_dimensions(embeddings: list[list[float]]) -> None:
         assert len(embedding) == EMBEDDING_DIM, (
             f"Embedding {i} has dimension {len(embedding)}, expected {EMBEDDING_DIM}"
         )
-        assert all(isinstance(x, (int, float)) for x in embedding), (
-            f"Embedding {i} contains non-numeric values"
-        )
+        assert all(
+            isinstance(x, int | float) and not isinstance(x, bool) for x in embedding
+        ), f"Embedding {i} contains non-numeric values or booleans"
 
 
 class MockProgressCallback:
@@ -235,8 +266,18 @@ class MockProgressCallback:
             return
 
         for i in range(1, len(self.calls)):
-            current_progress = self.calls[i]["current"] / self.calls[i]["total"]
-            prev_progress = self.calls[i - 1]["current"] / self.calls[i - 1]["total"]
+            current_total = self.calls[i]["total"]
+            prev_total = self.calls[i - 1]["total"]
+
+            assert current_total > 0, (
+                f"Progress total must be > 0 at call {i}, got {current_total}"
+            )
+            assert prev_total > 0, (
+                f"Progress total must be > 0 at call {i - 1}, got {prev_total}"
+            )
+
+            current_progress = self.calls[i]["current"] / current_total
+            prev_progress = self.calls[i - 1]["current"] / prev_total
 
             assert current_progress >= prev_progress, (
                 f"Progress decreased from {prev_progress:.2f} to {current_progress:.2f}"

@@ -14,6 +14,12 @@ class TestServerHealth:
         """Test the health check tool returns proper status."""
         result = await mcp_client.call_tool("health_check", {})
 
+        # Assert top-level response shape
+        assert result is not None
+        assert hasattr(result, "success")
+        assert result.success is True
+        assert hasattr(result, "error")
+        assert result.error is None or not result.error
         assert result.data is not None
         health_data = result.data
 
@@ -42,6 +48,12 @@ class TestServerHealth:
         """Test the server info tool returns comprehensive information."""
         result = await mcp_client.call_tool("get_server_info", {})
 
+        # Assert top-level response shape
+        assert result is not None
+        assert hasattr(result, "success")
+        assert result.success is True
+        assert hasattr(result, "error")
+        assert result.error is None or not result.error
         assert result.data is not None
         info_data = result.data
 
@@ -88,8 +100,12 @@ class TestServerHealth:
         """Test health check with actual services running."""
         result = await mcp_client.call_tool("health_check", {})
 
+        assert result.data is not None, "Health check should return data"
         health_data = result.data
         services = health_data["services"]
+
+        # Ensure at least some services are present and checked
+        assert len(services) > 0, "At least one service should be present"
 
         # With real services, these should be healthy
         if "embedding" in services:

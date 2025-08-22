@@ -9,6 +9,7 @@ import hashlib
 import logging
 import re
 import uuid
+from abc import ABC, abstractmethod
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -227,8 +228,25 @@ class SimilarityDetector:
         return near_duplicates
 
 
-class DeduplicationManager:
-    """Manages content deduplication across the RAG system."""
+class DeduplicationManager(ABC):
+    """
+    Abstract base class for managing content deduplication across the RAG system.
+
+    This class provides a framework for deduplication operations including content
+    hashing, similarity detection, and chunk lifecycle management. Subclasses must
+    implement the abstract methods to provide vector database-specific functionality
+    for finding, identifying, and cleaning up chunks.
+
+    Abstract methods that must be implemented:
+    - find_existing_chunks: Query vector DB for existing chunks by source URL
+    - identify_orphaned_chunks: Find chunks that no longer have corresponding content
+    - cleanup_orphaned_chunks: Remove orphaned chunks from the vector database
+
+    The class provides concrete implementations for:
+    - Content hashing and normalization
+    - Similarity detection and deduplication logic
+    - Backwards compatibility handling
+    """
 
     def __init__(self, similarity_threshold: float = 0.95):
         self.hasher = ContentHasher()
@@ -383,48 +401,63 @@ class DeduplicationManager:
         """
         return self.similarity_detector.calculate_jaccard_similarity(content1, content2)
 
+    @abstractmethod
     async def find_existing_chunks(self, source_url: str) -> list[dict[str, Any]]:
         """
         Find existing chunks for a source URL.
+
+        This method must be implemented by subclasses to query the specific
+        vector database and return existing chunks for the given source URL.
 
         Args:
             source_url: Source URL to find chunks for
 
         Returns:
             List of existing chunk dictionaries
-        """
-        # This would typically query the vector database
-        # For now, return empty list as placeholder
-        return []
 
+        Raises:
+            NotImplementedError: If not implemented by subclass
+        """
+        raise NotImplementedError("Subclasses must implement find_existing_chunks")
+
+    @abstractmethod
     async def identify_orphaned_chunks(self, source_url: str) -> list[str]:
         """
         Identify orphaned chunks that no longer have corresponding content.
+
+        This method must be implemented by subclasses to identify chunks that
+        exist in the vector database but don't have corresponding content in
+        the new crawl data.
 
         Args:
             source_url: Source URL to check for orphans
 
         Returns:
             List of orphaned chunk IDs
-        """
-        # This would identify chunks that exist in the database
-        # but don't have corresponding content in the new crawl
-        # Placeholder implementation
-        return []
 
+        Raises:
+            NotImplementedError: If not implemented by subclass
+        """
+        raise NotImplementedError("Subclasses must implement identify_orphaned_chunks")
+
+    @abstractmethod
     async def cleanup_orphaned_chunks(self, chunk_ids: list[str]) -> int:
         """
         Clean up orphaned chunks by deleting them.
+
+        This method must be implemented by subclasses to delete the specified
+        chunks from the specific vector database implementation.
 
         Args:
             chunk_ids: List of chunk IDs to delete
 
         Returns:
-            Number of chunks deleted
+            Number of chunks successfully deleted
+
+        Raises:
+            NotImplementedError: If not implemented by subclass
         """
-        # This would delete the specified chunks from the vector database
-        # Placeholder implementation
-        return len(chunk_ids)
+        raise NotImplementedError("Subclasses must implement cleanup_orphaned_chunks")
 
     def normalize_content_for_comparison(self, content: str) -> str:
         """

@@ -115,6 +115,16 @@ class TestCrawlModels:
         assert isinstance(result.start_time, datetime)
 
     @pytest.mark.unit
+    def test_crawl_statistics_attempted_pages(self):
+        """Test CrawlStatistics attempted_pages property."""
+        stats = CrawlStatistics(total_pages_crawled=80, total_pages_failed=20)
+        assert stats.attempted_pages == 100
+
+        # Test with zero values
+        empty_stats = CrawlStatistics()
+        assert empty_stats.attempted_pages == 0
+
+    @pytest.mark.unit
     def test_crawl_result_success_rate(self):
         """Test CrawlResult success_rate property."""
         stats = CrawlStatistics(total_pages_crawled=80, total_pages_failed=20)

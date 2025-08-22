@@ -17,7 +17,7 @@ This guide covers comprehensive configuration options, best practices, and optim
 
 ```bash
 # Vector Database (Qdrant)
-QDRANT_URL=http://localhost:6333
+QDRANT_URL=http://localhost:7000
 QDRANT_COLLECTION=crawlerr_documents
 QDRANT_API_KEY=                        # Optional for secured instances
 
@@ -36,7 +36,7 @@ USER_AGENT="Crawly-MCP/1.0"          # User agent string
 
 # Server Configuration
 SERVER_HOST=127.0.0.1                  # Server host
-SERVER_PORT=8000                       # Server port
+SERVER_PORT=8010                       # Server port
 LOG_LEVEL=INFO                         # Logging level (DEBUG, INFO, WARN, ERROR)
 ```
 
@@ -232,14 +232,14 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.15.1
     ports:
-      - "6333:6333"
+      - "7000:7000"
     volumes:
       - qdrant_storage:/qdrant/storage
     environment:
       - QDRANT_LOG_LEVEL=INFO
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:7000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -308,13 +308,13 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.15.1
     ports:
-      - "6333:6333"
+      - "7000:7000"
     volumes:
       - /opt/crawly/qdrant:/qdrant/storage
     environment:
       - QDRANT_LOG_LEVEL=WARN
-      - QDRANT_SERVICE__HTTP_PORT=6333
-      - QDRANT_SERVICE__GRPC_PORT=6334
+      - QDRANT_SERVICE__HTTP_PORT=7000
+      - QDRANT_SERVICE__GRPC_PORT=7001
       - QDRANT_STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=8
       - QDRANT_STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=4
     restart: always
@@ -503,10 +503,10 @@ MAX_MEMORY_USAGE_MB=2048
 docker-compose ps
 
 # Verify connectivity
-curl http://localhost:6333/health
+curl http://localhost:7000/health
 
 # Check firewall/network configuration
-# Ensure ports 6333 (Qdrant) and 8080 (TEI) are open
+# Ensure ports 7000 (Qdrant) and 8080 (TEI) are open
 ```
 
 #### 4. Embedding Generation Failures

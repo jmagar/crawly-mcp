@@ -115,7 +115,7 @@ class EmbeddingService:
         if normalize is None:
             normalize = settings.embedding_normalize
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         try:
             # Ensure client is open before making request
@@ -142,7 +142,7 @@ class EmbeddingService:
             result = response.json()
             embedding = result[0] if isinstance(result, list) else result
 
-            processing_time = time.time() - start_time
+            processing_time = max(time.perf_counter() - start_time, 1e-6)
 
             return EmbeddingResult(
                 text=text,
@@ -190,7 +190,7 @@ class EmbeddingService:
         if normalize is None:
             normalize = settings.embedding_normalize
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         try:
             await self._ensure_client_open()
@@ -216,7 +216,7 @@ class EmbeddingService:
                 raise ToolError(f"Batch embedding failed: {error_msg}")
 
             result = response.json()
-            processing_time = time.time() - start_time
+            processing_time = max(time.perf_counter() - start_time, 1e-6)
 
             # Convert to EmbeddingResult objects
             results = []
@@ -279,15 +279,15 @@ class EmbeddingService:
             (i, text.strip()) for i, text in enumerate(texts) if text.strip()
         ]
         if not valid_texts:
-            raise ToolError("No valid texts to embed")
+            return []
 
         results = []
         total_batches = (len(valid_texts) + batch_size - 1) // batch_size
 
         logger.info(f"Processing {len(valid_texts)} texts in {total_batches} batches")
 
-        # Start timing the entire batch process
-        batch_start_time = time.time()
+        # Start timing the entire batch process with high-resolution timer
+        batch_start_time = time.perf_counter()
 
         for batch_idx in range(total_batches):
             start_idx = batch_idx * batch_size
@@ -336,12 +336,20 @@ class EmbeddingService:
                 logger.error(f"Batch processing failed: {e}")
                 raise ToolError(f"Batch embedding generation failed: {e!s}") from e
 
-        # Log total batch processing time
-        batch_end_time = time.time()
-        total_batch_time = batch_end_time - batch_start_time
-        logger.info(
-            f"Completed embedding generation for {len(valid_texts)} texts in {total_batch_time:.2f}s - {len(valid_texts) / total_batch_time:.1f} embeddings/sec"
-        )
+        # Log total batch processing time with high-resolution timer
+        batch_end_time = time.perf_counter()
+        elapsed_time = batch_end_time - batch_start_time
+
+        # Guard against division by zero for very small/instantaneous batches
+        if elapsed_time > 0:
+            throughput = len(valid_texts) / elapsed_time
+            logger.info(
+                f"Completed embedding generation for {len(valid_texts)} texts in {elapsed_time:.2f}s - {throughput:.1f} embeddings/sec"
+            )
+        else:
+            logger.info(
+                f"Completed embedding generation for {len(valid_texts)} texts instantaneously"
+            )
 
         # Sort results by original index and return embedding results
         results.sort(key=lambda x: x[0])

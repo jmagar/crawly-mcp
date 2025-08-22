@@ -24,15 +24,21 @@ This directory contains comprehensive tests for the Crawler MCP FastMCP server u
 ### Prerequisites
 
 1. **Start Required Services**:
+
    ```bash
    docker-compose up -d  # Start Qdrant and TEI services
    ```
 
 2. **Environment Variables**:
    Copy `tests/.env.test` to `.env` and adjust as needed:
+
    ```bash
    cp tests/.env.test .env
    ```
+
+   Note: The examples below assume default ports. If you've configured custom ports, replace:
+   - `7000` with the value of `${QDRANT_HTTP_PORT}`
+   - `8080` with the value of `${TEI_HTTP_PORT}`
 
 ### Test Commands
 
@@ -120,6 +126,7 @@ async def test_debug_example(mcp_client: Client):
 ### Logging
 
 Adjust log levels in `.env` for more detailed output:
+
 ```env
 LOG_LEVEL=DEBUG  # For detailed logging
 LOG_TO_FILE=true  # To capture logs in files
@@ -128,6 +135,7 @@ LOG_TO_FILE=true  # To capture logs in files
 ### Test Data Inspection
 
 Access services directly in tests:
+
 ```python
 async def test_inspect_data(vector_service: VectorService):
     info = await vector_service.get_collection_info()
@@ -151,14 +159,16 @@ For CI environments:
 4. Use test-specific timeouts and retries
 
 Example GitHub Actions:
+
 ```yaml
 - name: Start services
   run: docker-compose up -d
 
 - name: Wait for services
   run: |
-    timeout 60 bash -c 'until curl -f http://localhost:6333/health; do sleep 2; done'
-    timeout 60 bash -c 'until curl -f http://localhost:8080/health; do sleep 2; done'
+    # Using environment variables for port configuration
+    timeout 60 bash -c 'until curl -f http://localhost:${QDRANT_HTTP_PORT:-7000}/health; do sleep 2; done'
+    timeout 60 bash -c 'until curl -f http://localhost:${TEI_HTTP_PORT:-8080}/health; do sleep 2; done'
 
 - name: Run tests
   run: uv run pytest -m "not slow"

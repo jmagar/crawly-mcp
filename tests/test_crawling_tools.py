@@ -5,7 +5,7 @@ Test crawling tools with in-memory FastMCP client.
 from pathlib import Path
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, ToolError
 
 
 class TestCrawlingTools:
@@ -146,6 +146,7 @@ class TestCrawlingTools:
 
     @pytest.mark.slow
     @pytest.mark.integration
+    @pytest.mark.flaky(reruns=2)
     async def test_crawl_small_website(self, mcp_client: Client):
         """Test crawling a small website (marked as slow)."""
         # Use a simple, reliable test site
@@ -176,7 +177,7 @@ class TestCrawlingTools:
     @pytest.mark.unit
     async def test_invalid_url_handling(self, mcp_client: Client):
         """Test handling of invalid URLs."""
-        with pytest.raises(Exception):  # Should raise ToolError
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "scrape",
                 {
@@ -187,7 +188,7 @@ class TestCrawlingTools:
     @pytest.mark.unit
     async def test_nonexistent_directory(self, mcp_client: Client):
         """Test handling of nonexistent directory."""
-        with pytest.raises(Exception):  # Should raise ToolError
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "crawl",
                 {
@@ -199,11 +200,11 @@ class TestCrawlingTools:
     async def test_crawl_parameter_validation(self, mcp_client: Client):
         """Test parameter validation for crawl tool."""
         # Test missing target
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool("crawl", {})
 
         # Test invalid max_pages
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "crawl",
                 {
@@ -216,11 +217,11 @@ class TestCrawlingTools:
     async def test_scrape_parameter_validation(self, mcp_client: Client):
         """Test parameter validation for scrape tool."""
         # Test missing URL
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool("scrape", {})
 
         # Test invalid extraction strategy
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "scrape",
                 {

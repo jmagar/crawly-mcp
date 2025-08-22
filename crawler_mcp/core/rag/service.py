@@ -13,6 +13,7 @@ import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from threading import RLock
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -36,6 +37,7 @@ class QueryCache:
         self.cache: dict[str, tuple[RagResult, datetime]] = {}
         self.max_size = max_size
         self.ttl = timedelta(minutes=ttl_minutes)
+        self._lock = RLock()
 
     def _generate_cache_key(
         self,
@@ -44,6 +46,9 @@ class QueryCache:
         min_score: float,
         source_filters: list[str] | None,
         rerank: bool,
+        include_content: bool,
+        include_metadata: bool,
+        date_range: tuple[str, str] | None,
     ) -> str:
         """Generate a deterministic cache key from query parameters."""
         key_components = [
@@ -52,6 +57,9 @@ class QueryCache:
             str(min_score),
             str(sorted(source_filters) if source_filters else ""),
             str(rerank),
+            str(include_content),
+            str(include_metadata),
+            str(date_range) if date_range else "",
         ]
         key_string = "|".join(key_components)
         return hashlib.md5(key_string.encode()).hexdigest()
@@ -63,21 +71,32 @@ class QueryCache:
         min_score: float,
         source_filters: list[str] | None,
         rerank: bool,
+        include_content: bool,
+        include_metadata: bool,
+        date_range: tuple[str, str] | None,
     ) -> RagResult | None:
         """Get cached result if it exists and hasn't expired."""
         cache_key = self._generate_cache_key(
-            query, limit, min_score, source_filters, rerank
+            query,
+            limit,
+            min_score,
+            source_filters,
+            rerank,
+            include_content,
+            include_metadata,
+            date_range,
         )
 
-        if cache_key in self.cache:
-            result, timestamp = self.cache[cache_key]
-            if datetime.utcnow() - timestamp < self.ttl:
-                logger.debug(f"Cache hit for query: {query[:50]}...")
-                return result
-            else:
-                # Expired, remove from cache
-                del self.cache[cache_key]
-                logger.debug(f"Cache expired for query: {query[:50]}...")
+        with self._lock:
+            if cache_key in self.cache:
+                result, timestamp = self.cache[cache_key]
+                if datetime.utcnow() - timestamp < self.ttl:
+                    logger.debug(f"Cache hit for query: {query[:50]}...")
+                    return result
+                else:
+                    # Expired, remove from cache
+                    del self.cache[cache_key]
+                    logger.debug(f"Cache expired for query: {query[:50]}...")
 
         return None
 
@@ -89,10 +108,20 @@ class QueryCache:
         source_filters: list[str] | None,
         rerank: bool,
         result: RagResult,
+        include_content: bool,
+        include_metadata: bool,
+        date_range: tuple[str, str] | None,
     ) -> None:
         """Cache a result with current timestamp."""
         cache_key = self._generate_cache_key(
-            query, limit, min_score, source_filters, rerank
+            query,
+            limit,
+            min_score,
+            source_filters,
+            rerank,
+            include_content,
+            include_metadata,
+            date_range,
         )
 
         # If cache is full, remove oldest entry
@@ -193,6 +222,7 @@ class RagService:
     _initialized = False
     _context_count = 0
     _lock = None
+    _auto_opened = False
 
     def __new__(cls) -> "RagService":
         if cls._instance is None:
@@ -304,6 +334,7 @@ class RagService:
                 logger.debug("Closing underlying services (last context)")
                 await self.embedding_service.__aexit__(exc_type, exc_val, exc_tb)
                 await self.vector_service.__aexit__(exc_type, exc_val, exc_tb)
+                RagService._auto_opened = False
             else:
                 logger.debug(
                     f"Keeping services alive (context count: {self._context_count})"
@@ -313,6 +344,19 @@ class RagService:
         """Close all services."""
         await self.embedding_service.close()
         await self.vector_service.close()
+
+    async def _ensure_open(self) -> None:
+        """Ensure underlying services are initialized without requiring context manager."""
+        if RagService._lock is None:
+            RagService._lock = asyncio.Lock()
+        async with RagService._lock:
+            # Only initialize if not already done
+            if self._context_count == 0:
+                logger.debug("Auto-initializing underlying services (ensure_open)")
+                await self.embedding_service.__aenter__()
+                await self.vector_service.__aenter__()
+                RagService._auto_opened = True
+            self._context_count += 1
 
     async def health_check(self) -> dict[str, bool]:
         """
@@ -474,16 +518,37 @@ class RagService:
         Returns:
             RagResult with matched documents
         """
+        await self._ensure_open()
         start_time = time.time()
 
+        # Compute effective rerank flag
+        effective_rerank = rerank and getattr(query, "rerank", True)
+
         # Check cache first for exact query match
+        # Convert datetime tuple to string tuple for cache key if needed
+        date_range_str = None
+        if query.date_range:
+            date_range_str = (
+                query.date_range[0].isoformat(),
+                query.date_range[1].isoformat(),
+            )
+
         cached_result = self.query_cache.get(
-            query.query, query.limit, query.min_score, query.source_filters, rerank
+            query.query,
+            query.limit,
+            query.min_score,
+            query.source_filters,
+            rerank,
+            include_content=query.include_content,
+            include_metadata=query.include_metadata,
+            date_range=date_range_str,
         )
         if cached_result is not None:
             logger.info(f"Cache hit for query: '{query.query[:50]}...'")
             self.metrics.record_query(
-                cache_hit=True, query_time=time.time() - start_time, reranked=rerank
+                cache_hit=True,
+                query_time=time.time() - start_time,
+                reranked=effective_rerank,
             )
             return cached_result
 
@@ -516,7 +581,11 @@ class RagService:
 
             # Apply re-ranking if requested
             rerank_time = None
-            if rerank and len(search_matches) > 1 and self.reranker_type != "none":
+            if (
+                effective_rerank
+                and len(search_matches) > 1
+                and self.reranker_type != "none"
+            ):
                 rerank_start = time.time()
                 search_matches = await self._rerank_results(query.query, search_matches)
                 rerank_time = time.time() - rerank_start
@@ -555,7 +624,7 @@ class RagService:
             self.metrics.record_query(
                 cache_hit=False,
                 query_time=processing_time,
-                reranked=rerank and rerank_time is not None,
+                reranked=effective_rerank and rerank_time is not None,
             )
 
             # Cache the result for future queries
@@ -566,6 +635,9 @@ class RagService:
                 query.source_filters,
                 rerank,
                 result,
+                include_content=query.include_content,
+                include_metadata=query.include_metadata,
+                date_range=date_range_str,
             )
 
             return result
@@ -632,7 +704,7 @@ class RagService:
             scores = await asyncio.to_thread(self.reranker.predict, pairs)
 
             # Update match scores with reranker predictions
-            for match, score in zip(matches, scores, strict=True):
+            for match, score in zip(matches, scores, strict=False):
                 # Convert reranker logits to normalized probability scores
                 reranker_score = float(score)
 
@@ -643,6 +715,14 @@ class RagService:
                 # Keep original vector similarity but boost with reranker confidence
                 original_score = match.score
                 match.score = 0.4 * match.score + 0.6 * normalized_reranker_score
+
+                # Recalculate relevance based on new score
+                if match.score >= 0.8:
+                    match.relevance = "high"
+                elif match.score >= 0.6:
+                    match.relevance = "medium"
+                else:
+                    match.relevance = "low"
 
                 logger.debug(
                     "Reranking: raw_logit=%.4f, sigmoid_score=%.4f, original_score=%.4f, final_score=%.4f, reranker_model=%s",
@@ -719,6 +799,14 @@ class RagService:
 
                 match.score = min(1.0, combined_score)
 
+                # Recalculate relevance to match the updated score (consistent with Qwen path)
+                if match.score >= 0.8:
+                    match.relevance = "high"
+                elif match.score >= 0.6:
+                    match.relevance = "medium"
+                else:
+                    match.relevance = "low"
+
             # Sort by combined score
             matches.sort(key=lambda m: m.score, reverse=True)
 
@@ -740,6 +828,7 @@ class RagService:
         Returns:
             Dictionary with system statistics
         """
+        await self._ensure_open()
         try:
             health = await self.health_check()
             collection_info = await self.vector_service.get_collection_info()
@@ -753,10 +842,10 @@ class RagService:
                 "metrics": self.metrics.get_stats(),
                 "config": {
                     "chunk_size_tokens": self.chunk_size
-                    if self.tokenizer_type == "token"
+                    if self.tokenizer_type == "tiktoken"
                     else None,
                     "chunk_overlap_tokens": self.chunk_overlap
-                    if self.tokenizer_type == "token"
+                    if self.tokenizer_type == "tiktoken"
                     else None,
                     "chunk_size_chars": self.chunk_size
                     if self.tokenizer_type == "character"
@@ -764,9 +853,7 @@ class RagService:
                     "chunk_overlap_chars": self.chunk_overlap
                     if self.tokenizer_type == "character"
                     else None,
-                    "tokenizer_type": getattr(
-                        self, "tokenizer_type", "character_based"
-                    ),
+                    "tokenizer_type": getattr(self, "tokenizer_type", "character"),
                     "reranker_type": getattr(self, "reranker_type", "none"),
                     "reranker_model": settings.reranker_model
                     if self.reranker_type == "qwen3"
@@ -792,6 +879,7 @@ class RagService:
         Returns:
             True if deletion was successful
         """
+        await self._ensure_open()
         try:
             deleted_count = await self.vector_service.delete_documents_by_source(
                 source_url

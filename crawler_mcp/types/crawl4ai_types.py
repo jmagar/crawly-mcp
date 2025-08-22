@@ -10,7 +10,9 @@ from collections.abc import AsyncIterator
 from enum import Enum
 from typing import (
     Any,
+    Literal,
     Protocol,
+    overload,
     runtime_checkable,
 )
 
@@ -25,7 +27,7 @@ class MarkdownGenerationResult(Protocol):
     fit_html: str | None
 
 
-class CrawlResult(Protocol):
+class Crawl4aiCrawlResult(Protocol):
     """Protocol for crawl4ai CrawlResult."""
 
     url: str
@@ -39,9 +41,6 @@ class CrawlResult(Protocol):
     links: dict[str, Any]
     metadata: dict[str, Any]
 
-    # Private field that may contain integer hashes
-    _markdown: MarkdownGenerationResult | int | None
-
 
 class AsyncWebCrawler(Protocol):
     """Protocol for crawl4ai AsyncWebCrawler."""
@@ -50,9 +49,29 @@ class AsyncWebCrawler(Protocol):
 
     async def __aexit__(self, *args: Any) -> None: ...
 
+    @overload
+    async def arun(
+        self,
+        url: str,
+        config: Any | None = None,
+        *,
+        stream: Literal[False] | None = None,
+        **kwargs: Any,
+    ) -> Crawl4aiCrawlResult: ...
+
+    @overload
+    async def arun(
+        self,
+        url: str,
+        config: Any | None = None,
+        *,
+        stream: Literal[True],
+        **kwargs: Any,
+    ) -> AsyncIterator[Crawl4aiCrawlResult]: ...
+
     async def arun(
         self, url: str, config: Any | None = None, **kwargs: Any
-    ) -> CrawlResult | AsyncIterator[CrawlResult]: ...
+    ) -> Crawl4aiCrawlResult | AsyncIterator[Crawl4aiCrawlResult]: ...
 
 
 class BrowserConfig(Protocol):
@@ -64,7 +83,11 @@ class BrowserConfig(Protocol):
 
 
 class CrawlerRunConfig(Protocol):
-    """Protocol for crawl4ai CrawlerRunConfig."""
+    """Protocol for crawl4ai CrawlerRunConfig.
+
+    .. deprecated:: 0.2.0
+       Use CrawlerRunConfigAdvanced instead for better type safety.
+    """
 
     def __init__(
         self,
@@ -145,7 +168,7 @@ class LLMExtractionStrategy(ExtractionStrategy, Protocol):
 
     def __init__(
         self,
-        provider: str = "openai/gpt-4o-mini",
+        provider: str | None = None,
         api_token: str | None = None,
         instruction: str | None = None,
         schema: dict[str, Any] | None = None,
@@ -247,35 +270,48 @@ try:
     )
 
     # Type-safe aliases that satisfy our protocols
-    DefaultMarkdownGeneratorImpl = _DefaultMarkdownGenerator
-    PruningContentFilterImpl = _PruningContentFilter
-    MarkdownGenerationResultImpl = _MarkdownGenerationResult
+    DefaultMarkdownGeneratorImpl: type[DefaultMarkdownGenerator] = (
+        _DefaultMarkdownGenerator
+    )
+    PruningContentFilterImpl: type[PruningContentFilter] = _PruningContentFilter
+    MarkdownGenerationResultImpl: type[MarkdownGenerationResult] = (
+        _MarkdownGenerationResult
+    )
 
 except ImportError:
     # Fallback for when crawl4ai is not available
-    DefaultMarkdownGeneratorImpl = None  # type: ignore
-    PruningContentFilterImpl = None  # type: ignore
-    MarkdownGenerationResultImpl = None  # type: ignore
+    DefaultMarkdownGeneratorImpl: type[DefaultMarkdownGenerator] | None = None  # type: ignore[assignment]
+    PruningContentFilterImpl: type[PruningContentFilter] | None = None  # type: ignore[assignment]
+    MarkdownGenerationResultImpl: type[MarkdownGenerationResult] | None = None  # type: ignore[assignment]
 
 
 # Type aliases for cleaner imports
-Crawl4aiResult = CrawlResult
+Crawl4aiResult = Crawl4aiCrawlResult
 Crawl4aiMarkdownResult = MarkdownGenerationResult
 
 # Export the implementation classes for runtime use
 __all__ = [
     "AsyncWebCrawler",
     "BrowserConfig",
+    "CacheMode",
+    "ContentFilterStrategy",
     "CosineStrategy",
+    "Crawl4aiCrawlResult",
     "Crawl4aiMarkdownResult",
     "Crawl4aiResult",
-    "CrawlResult",
     "CrawlerRunConfig",
+    "CrawlerRunConfigAdvanced",
+    "DeepCrawlStrategy",
     "DefaultMarkdownGenerator",
     "DefaultMarkdownGeneratorImpl",
+    "ExtractionStrategy",
+    "FilterChain",
+    "KeywordRelevanceScorer",
     "LLMExtractionStrategy",
     "MarkdownGenerationResult",
     "MarkdownGenerationResultImpl",
+    "MarkdownGenerationStrategy",
     "PruningContentFilter",
     "PruningContentFilterImpl",
+    "URLPatternFilter",
 ]

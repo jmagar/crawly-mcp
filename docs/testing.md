@@ -1,14 +1,12 @@
 # Testing Your Server
-
 > Unit test your MCP servers with the FastMCP Client's deterministic testing capabilities
 
-The [FastMCP Client](/clients/client) is a deterministic testing tool that gives you complete programmatic control over MCP server interactions. You call specific tools with exact arguments, verify responses, and test edge cases - making it ideal for unit testing your MCP servers.
+The [FastMCP Client](/clients/client) is a deterministic testing tool that gives you complete programmatic control over MCP server interactions. You call specific tools with exact arguments, verify responses, and test edge cases—making it ideal for unit testing your MCP servers.
 
 ## In-Memory Testing
+The FastMCP Client's standout feature is in-memory testing. Instead of deploying your server or managing network connections, you pass your server instance directly to the client. This creates a zero‑overhead connection that runs entirely in memory.
 
-The FastMCP Client's standout feature is in-memory testing. Instead of deploying your server or managing network connections, you pass your server instance directly to the client. This creates a zero-overhead connection that runs entirely in memory.
-
-What makes this approach so powerful is that everything runs in the same Python process. You can set breakpoints anywhere - in your test code or inside your server handlers - and step through with your debugger. There's no server startup scripts, no port management, no cleanup between tests. Tests execute instantly without network overhead.
+What makes this approach so powerful is that everything runs in the same Python process. You can set breakpoints anywhere—in your test code or inside your server handlers—and step through with your debugger. There's no server startup scripts, no port management, no cleanup between tests. Tests execute instantly without network overhead.
 
 ```python
 from fastmcp import FastMCP, Client
@@ -43,7 +41,7 @@ The in-memory approach transforms MCP testing from a deployment challenge into s
 
 ## Testing with Frameworks
 
-The FastMCP Client works seamlessly with any Python testing framework. Whether you prefer pytest, unittest, or another framework, the pattern remains consistent: create a server, pass it to the client, and verify behavior.
+The FastMCP Client works seamlessly with any Python testing framework. Whether you prefer pytest, unittest, or another framework, the pattern is the same: create a server, pass it to the client, and verify behavior.
 
 ```python
 import pytest
@@ -147,10 +145,10 @@ async def test_authenticated_server():
 
 ## Best Practices
 
-1. **Default to in-memory testing** - It's faster, more reliable, and easier to debug
-2. **Test behavior, not implementation** - Call tools and verify responses rather than testing internals
-3. **Use framework fixtures** - Create reusable server configurations for your test suite
-4. **Mock external dependencies** - Keep tests fast and deterministic by mocking databases, APIs, etc.
-5. **Test error cases** - Verify your server handles invalid inputs and edge cases properly
+1. **Default to in-memory testing** — It's faster, more reliable, and easier to debug.
+2. **Test behavior, not implementation** — Call tools and verify responses rather than testing internals.
+3. **Use framework fixtures** — Create reusable server configurations for your test suite.
+4. **Mock external dependencies** — Keep tests fast and deterministic by mocking databases, APIs, etc.
+5. **Test error cases** — Verify your server handles invalid inputs and edge cases properly.
 
 The FastMCP Client transforms MCP server testing from a deployment challenge into a straightforward unit testing task. With in-memory connections and deterministic control, you can build comprehensive test suites that run in milliseconds.

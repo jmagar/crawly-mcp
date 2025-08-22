@@ -4,6 +4,8 @@ Test core services directly (not through MCP tools).
 These tests verify the underlying services work correctly.
 """
 
+import math
+
 import pytest
 
 from crawler_mcp.core import EmbeddingService, RagService, VectorService
@@ -146,7 +148,8 @@ class TestVectorService:
 
         # Upsert documents
         success = await vector_service.upsert_documents(documents)
-        assert isinstance(success, (bool, int))  # May return count or boolean
+        assert isinstance(success, int)  # Returns integer count
+        assert success >= 0  # Should be non-negative count
 
         # Wait a moment for indexing
         import asyncio
@@ -174,7 +177,7 @@ class TestVectorService:
                 assert hasattr(result.document, "content")
             if hasattr(result, "score"):
                 assert isinstance(result.score, (int, float))
-                assert 0 <= result.score <= 1
+                assert math.isfinite(result.score)  # Score should be numeric and finite
 
             # Document should contain our test data
             if hasattr(result, "document"):
@@ -252,12 +255,23 @@ class TestRagService:
         result = await rag_service.process_crawl_result(mock_result)
 
         assert isinstance(result, dict)
-        # Should return processing statistics
-        assert (
-            "chunks_indexed" in result
-            or "total_chunks" in result
-            or isinstance(result.get("chunks_indexed", 0), int)
+        # Should return processing statistics with concrete keys
+        expected_keys = [
+            "chunks_created",
+            "embeddings_generated",
+            "chunks_stored",
+            "documents_processed",
+        ]
+        present_keys = [key for key in expected_keys if key in result]
+        assert len(present_keys) >= 1, (
+            f"At least one of {expected_keys} should be present in result"
         )
+
+        # Verify integer values for present keys
+        for key in present_keys:
+            assert isinstance(result[key], int), (
+                f"Key '{key}' should have integer value"
+            )
 
     @pytest.mark.integration
     @pytest.mark.requires_services

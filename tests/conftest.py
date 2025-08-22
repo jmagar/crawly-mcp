@@ -6,6 +6,7 @@ This module provides comprehensive test fixtures using real services
 """
 
 import asyncio
+import contextlib
 import os
 import tempfile
 import warnings
@@ -15,6 +16,9 @@ from pathlib import Path
 import pytest
 from fastmcp import Client, FastMCP
 
+from crawler_mcp.config import settings
+from crawler_mcp.core import EmbeddingService, RagService, VectorService
+
 # Fix NumPy 2.x + SciPy 1.16.1 compatibility issue for coverage measurement
 # Force NumPy and SciPy imports before coverage instrumentation to prevent conflicts
 try:
@@ -22,8 +26,8 @@ try:
     import scipy.stats
 
     # Force initialization to happen before pytest-cov instruments the code
-    np.__version__
-    scipy.stats.__version__
+    _ = np.__version__
+    _ = scipy.stats.__version__
 except Exception:
     # If there are import issues, proceed without the imports
     pass
@@ -33,9 +37,6 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*int.*argument must be a string.*")
 warnings.filterwarnings("ignore", message=".*_NoValueType.*")
-
-from crawler_mcp.config import CrawlerrSettings, settings
-from crawler_mcp.core import EmbeddingService, RagService, VectorService
 
 # Test constants
 EMBEDDING_DIM = 384  # Qwen3-Embedding-0.6B dimension
@@ -50,27 +51,36 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 
 
 @pytest.fixture(scope="session")
-def test_settings() -> CrawlerrSettings:
+def test_settings():
     """
-    Create test settings with real service endpoints.
+    Configure global settings with test-specific values.
 
-    Uses the same services as development but with test-specific collection.
+    Mutates the module-level settings so services pick up test values.
     """
-    # Override with test-specific values
-    test_config = {
-        "qdrant_collection": "test_crawler_mcp",  # Separate test collection
-        "log_level": "WARNING",  # Reduce noise in tests
-        "debug": False,
-        "production": False,
+    # Store original values for restoration
+    original_values = {
+        "qdrant_collection": settings.qdrant_collection,
+        "log_level": settings.log_level,
+        "debug": settings.debug,
+        "production": settings.production,
     }
 
-    # Create new settings instance with test overrides
-    return CrawlerrSettings(**{**settings.model_dump(), **test_config})
+    # Override with test-specific values
+    settings.qdrant_collection = "test_crawler_mcp"  # Separate test collection
+    settings.log_level = "WARNING"  # Reduce noise in tests
+    settings.debug = False
+    settings.production = False
+
+    yield settings
+
+    # Restore original values after tests
+    for key, value in original_values.items():
+        setattr(settings, key, value)
 
 
 @pytest.fixture(scope="session")
 async def setup_test_services(
-    test_settings: CrawlerrSettings,
+    test_settings,
 ) -> AsyncGenerator[None, None]:
     """
     Ensure test services are ready and create test collection.
@@ -104,16 +114,19 @@ async def setup_test_services(
     # Cleanup: Delete test collection after tests
     try:
         async with VectorService() as vector_service:
-            await vector_service._client.delete_collection(
-                test_settings.qdrant_collection
-            )
+            if hasattr(vector_service, "client") and callable(
+                getattr(vector_service.client, "delete_collection", None)
+            ):
+                await vector_service.client.delete_collection(
+                    settings.qdrant_collection
+                )
     except Exception:
         pass  # Cleanup is best-effort
 
 
 @pytest.fixture
 async def clean_test_collection(
-    test_settings: CrawlerrSettings,
+    test_settings,
 ) -> AsyncGenerator[None, None]:
     """
     Clean the test collection before each test.
@@ -123,12 +136,10 @@ async def clean_test_collection(
     try:
         async with VectorService() as vector_service:
             # Delete and recreate collection for clean state
-            try:
-                await vector_service._client.delete_collection(
-                    test_settings.qdrant_collection
+            with contextlib.suppress(Exception):
+                await vector_service.client.delete_collection(
+                    settings.qdrant_collection
                 )
-            except Exception:
-                pass  # Collection might not exist
 
             await vector_service.ensure_collection()
 

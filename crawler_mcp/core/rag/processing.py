@@ -369,6 +369,7 @@ class ProcessingPipeline:
         chunks_deleted = 0
         existing_chunks_map = {}
         legacy_chunks_to_delete = []
+        new_chunk_ids = set()  # Track new chunk IDs for orphan detection
 
         logger.info(
             f"Processing {total_pages} pages for RAG indexing (dedup={deduplication})"
@@ -451,6 +452,8 @@ class ProcessingPipeline:
                         content_hash = self.deduplication_manager.generate_content_hash(
                             chunk_data["text"]
                         )
+                        # Track chunk ID for orphan detection
+                        new_chunk_ids.add(chunk_id)
                     else:
                         import uuid
 
@@ -538,18 +541,7 @@ class ProcessingPipeline:
 
         # Step 2: Handle orphaned chunks
         if deduplication and settings.delete_orphaned_chunks and total_pages > 0:
-            # Find orphaned chunk IDs
-            new_chunk_ids = set()
-            for i, page in enumerate(crawl_result.pages):
-                temp_chunks = self.chunker.chunk_text(page.content)
-                for sub_chunk_idx, _ in enumerate(temp_chunks):
-                    composite_chunk_index = f"{i}_{sub_chunk_idx}"
-                    chunk_id = self.deduplication_manager.generate_deterministic_id(
-                        page.url, composite_chunk_index
-                    )
-                    new_chunk_ids.add(chunk_id)
-
-            # Identify orphaned chunks
+            # Identify orphaned chunks (existing chunks that are no longer present)
             orphaned_ids = set(existing_chunks_map.keys()) - new_chunk_ids
             all_ids_to_delete = orphaned_ids.union(set(legacy_chunks_to_delete))
 

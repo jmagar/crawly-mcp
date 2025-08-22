@@ -320,19 +320,17 @@ class RagService:
         return find_sentence_boundary(search_text, ideal_end)
 
     # Deduplication helper methods
-    def _generate_deterministic_id(self, url: str, chunk_index: int) -> str:
+    def _generate_deterministic_id(self, url: str, chunk_index: str | int) -> str:
         """
         Generate deterministic ID from URL and chunk index.
 
         Args:
             url: Source URL
-            chunk_index: Index of the chunk within the document
+            chunk_index: Index of the chunk within the document (can be int or string like "i_subchunk")
 
         Returns:
             Deterministic UUID string
         """
-        import uuid
-
         normalized_url = self._normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # Generate a deterministic UUID from the hash
@@ -1086,8 +1084,23 @@ class RagService:
         start_time = time.time()
 
         # Check cache first for exact query match
+        # Convert datetime tuple to string tuple for cache key if needed
+        date_range_str = None
+        if query.date_range:
+            date_range_str = (
+                query.date_range[0].isoformat(),
+                query.date_range[1].isoformat(),
+            )
+
         cached_result = self.query_cache.get(
-            query.query, query.limit, query.min_score, query.source_filters, rerank
+            query.query,
+            query.limit,
+            query.min_score,
+            query.source_filters,
+            rerank,
+            include_content=query.include_content,
+            include_metadata=query.include_metadata,
+            date_range=date_range_str,
         )
         if cached_result is not None:
             logger.info(f"Cache hit for query: '{query.query[:50]}...'")
@@ -1157,6 +1170,9 @@ class RagService:
                 query.source_filters,
                 rerank,
                 result,
+                include_content=query.include_content,
+                include_metadata=query.include_metadata,
+                date_range=date_range_str,
             )
 
             return result

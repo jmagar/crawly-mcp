@@ -7,7 +7,7 @@ import concurrent.futures
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..models.crawl import (
@@ -129,17 +129,23 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
             for batch_result in batch_results:
                 if isinstance(batch_result, PageContent):
                     pages.append(batch_result)
-                    total_bytes += len(batch_result.content)
+                    content_bytes = (
+                        batch_result.content
+                        if isinstance(batch_result.content, bytes)
+                        else batch_result.content.encode("utf-8")
+                    )
+                    total_bytes += len(content_bytes)
                 elif isinstance(batch_result, Exception):
                     errors.append(str(batch_result))
 
-            # Memory pressure check after processing
+            # Final memory pressure check after processing (informational)
             if (
                 self.memory_manager
                 and await self.memory_manager.check_memory_pressure()
             ):
-                self.logger.warning(
-                    "Memory pressure detected during directory processing"
+                self.logger.info(
+                    "Memory pressure still present after directory processing completion. "
+                    "Consider reducing batch sizes or max_files for future operations."
                 )
 
             # Calculate statistics
@@ -241,49 +247,18 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
             if file_path.stat().st_size == 0:
                 return False
 
-            # Skip very large files (>10MB) to prevent memory issues
-            if file_path.stat().st_size > 10 * 1024 * 1024:
+            # Skip large files based on configuration
+            max_size_bytes = settings.directory_max_file_size_mb * 1024 * 1024
+            if file_path.stat().st_size > max_size_bytes:
                 return False
 
-            # Skip binary files by extension
-            binary_extensions = {
-                ".exe",
-                ".dll",
-                ".so",
-                ".dylib",
-                ".bin",
-                ".obj",
-                ".o",
-                ".jpg",
-                ".jpeg",
-                ".png",
-                ".gif",
-                ".bmp",
-                ".ico",
-                ".tiff",
-                ".mp3",
-                ".mp4",
-                ".avi",
-                ".mov",
-                ".wmv",
-                ".flv",
-                ".wav",
-                ".zip",
-                ".tar",
-                ".gz",
-                ".bz2",
-                ".7z",
-                ".rar",
-                ".pdf",
-                ".doc",
-                ".docx",
-                ".xls",
-                ".xlsx",
-                ".ppt",
-                ".pptx",
-            }
+            # Skip files with excluded extensions (configurable)
+            # Convert to set for O(1) lookup
+            excluded_extensions = set(
+                ext.lower() for ext in settings.directory_excluded_extensions
+            )
 
-            if file_path.suffix.lower() in binary_extensions:
+            if file_path.suffix.lower() in excluded_extensions:
                 return False
 
             # Basic readability test
@@ -422,17 +397,60 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             loop = asyncio.get_running_loop()
+            results: list[PageContent | Exception] = []
 
-            # Process files in parallel using all available threads
-            tasks = [
-                loop.run_in_executor(
-                    executor, self._process_single_file_sync, file_path, base_directory
-                )
-                for file_path in file_paths
-            ]
+            # Submit in manageable batches to limit memory footprint
+            batch_size = max_workers * 8
+            for i in range(0, len(file_paths), batch_size):
+                # Check memory pressure before processing each batch
+                if (
+                    self.memory_manager
+                    and await self.memory_manager.check_memory_pressure()
+                ):
+                    self.logger.warning(
+                        f"Memory pressure detected before batch {i // batch_size + 1}. "
+                        "Applying backpressure..."
+                    )
+                    # Apply backpressure - wait for memory pressure to subside
+                    await self._wait_for_memory_relief()
 
-            # Use asyncio.gather for true parallelism
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+                batch = file_paths[i : i + batch_size]
+                futures = [
+                    loop.run_in_executor(
+                        executor,
+                        self._process_single_file_sync,
+                        file_path,
+                        base_directory,
+                    )
+                    for file_path in batch
+                ]
+
+                # Process futures with periodic memory checks
+                batch_results = []
+                completed_count = 0
+                for fut in asyncio.as_completed(futures):
+                    try:
+                        result = await fut
+                        batch_results.append(result)
+                        completed_count += 1
+
+                        # Check memory pressure every 16 files or at end of batch
+                        if completed_count % 16 == 0 or completed_count == len(futures):
+                            if (
+                                self.memory_manager
+                                and await self.memory_manager.check_memory_pressure()
+                            ):
+                                self.logger.warning(
+                                    f"Memory pressure detected during batch processing "
+                                    f"({completed_count}/{len(futures)} files completed). "
+                                    "Applying backpressure..."
+                                )
+                                await self._wait_for_memory_relief()
+                    except Exception as e:
+                        batch_results.append(e)
+                        completed_count += 1
+
+                results.extend(batch_results)
 
             # Filter and return results
             processed_results: list[PageContent | Exception] = []
@@ -446,6 +464,46 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                     )
 
             return processed_results
+
+    async def _wait_for_memory_relief(self) -> None:
+        """
+        Wait for memory pressure to subside by implementing exponential backoff.
+
+        This method will pause processing until memory pressure is relieved,
+        preventing OOM conditions during file processing.
+        """
+        if not self.memory_manager:
+            return
+
+        max_wait_time = 30.0  # Maximum wait time in seconds
+        check_interval = 0.5  # Initial check interval in seconds
+        max_retries = 10
+
+        for retry in range(max_retries):
+            # Check if memory pressure has been relieved
+            if not await self.memory_manager.check_memory_pressure():
+                if retry > 0:
+                    self.logger.info(
+                        f"Memory pressure relieved after {retry + 1} checks. "
+                        "Resuming file processing..."
+                    )
+                return
+
+            # Calculate wait time with exponential backoff, capped at max_wait_time
+            wait_time = min(check_interval * (2**retry), max_wait_time)
+
+            self.logger.debug(
+                f"Memory pressure persists (check {retry + 1}/{max_retries}). "
+                f"Waiting {wait_time:.1f}s before next check..."
+            )
+
+            await asyncio.sleep(wait_time)
+
+        # If we've exhausted retries, log a warning but continue processing
+        self.logger.warning(
+            f"Memory pressure persisted after {max_retries} checks. "
+            "Continuing with processing - monitor system resources carefully."
+        )
 
     def _process_single_file_sync(
         self, file_path: Path, base_directory: Path
@@ -496,8 +554,8 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 links=[],  # Could extract file references in future
                 images=[],
                 metadata=metadata,
-                timestamp=datetime.fromtimestamp(time.time()),
-                word_count=int(str(metadata.get("word_count", 0))),
+                timestamp=datetime.now(UTC),
+                word_count=int(metadata.get("word_count", 0)),
             )
 
             return page_content

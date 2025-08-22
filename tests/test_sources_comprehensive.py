@@ -8,6 +8,7 @@ to achieve high coverage on the models/sources.py module.
 from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from crawler_mcp.models.sources import (
     SourceInfo,
@@ -119,11 +120,9 @@ class TestSourceInfo:
             status="active",
             chunk_count=5,
             total_content_length=5000,
-            average_chunk_size=1000.0,
             created_at=created_time,
             updated_at=updated_time,
             last_crawled=last_crawled,
-            is_stale=False,
             metadata=metadata,
         )
 
@@ -134,10 +133,12 @@ class TestSourceInfo:
         assert source.status == "active"
         assert source.chunk_count == 5
         assert source.total_content_length == 5000
-        assert source.average_chunk_size == 1000.0
+        # Test computed property: average chunk size should be total_content_length / chunk_count
+        assert source.avg_chunk_size == 1000.0  # 5000 / 5 = 1000.0
         assert source.created_at == created_time
         assert source.updated_at == updated_time
         assert source.last_crawled == last_crawled
+        # Test computed property: is_stale should be False since last_crawled is recent
         assert source.is_stale is False
         assert source.metadata == metadata
 
@@ -154,7 +155,7 @@ class TestSourceInfo:
         assert source.status == "active"  # Default
         assert source.chunk_count == 0
         assert source.total_content_length == 0
-        assert source.average_chunk_size == 0.0
+        assert source.avg_chunk_size == 0.0
         assert source.is_stale is False
         assert isinstance(source.metadata, SourceMetadata)
 
@@ -208,8 +209,8 @@ class TestSourceInfo:
         )
         assert source.chunk_count == 10
 
-        # Test chunk_count validation (should handle negative as 0)
-        with pytest.raises(ValueError):
+        # Test chunk_count validation (should reject negative values)
+        with pytest.raises(ValidationError):
             SourceInfo(
                 id="invalid",
                 url="https://invalid.com",

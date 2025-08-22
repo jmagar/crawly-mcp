@@ -95,6 +95,11 @@ class CrawlStatistics(BaseModel):
     total_images_found: int = 0
     error_counts: dict[str, int] = Field(default_factory=dict)
 
+    @property
+    def attempted_pages(self) -> int:
+        """Total number of pages attempted (crawled + failed)."""
+        return self.total_pages_crawled + self.total_pages_failed
+
 
 class CrawlResult(BaseModel):
     model_config = ConfigDict()
@@ -113,12 +118,11 @@ class CrawlResult(BaseModel):
     @property
     def success_rate(self) -> float:
         """Calculate success rate as percentage of actual pages attempted."""
-        total_attempted = (
-            self.statistics.total_pages_crawled + self.statistics.total_pages_failed
-        )
-        if total_attempted == 0:
+        if self.statistics.attempted_pages == 0:
             return 0.0
-        return (self.statistics.total_pages_crawled / total_attempted) * 100.0
+        return (
+            self.statistics.total_pages_crawled / self.statistics.attempted_pages
+        ) * 100.0
 
     @property
     def is_complete(self) -> bool:

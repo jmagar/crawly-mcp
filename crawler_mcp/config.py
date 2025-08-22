@@ -2,6 +2,7 @@
 Configuration management for Crawlerr using Pydantic Settings.
 """
 
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -51,6 +52,7 @@ class CrawlerrSettings(BaseSettings):
     qdrant_prefetch_size: int = Field(
         default=1024, alias="QDRANT_PREFETCH_SIZE", ge=256, le=2048
     )
+    qdrant_search_exact: bool = Field(default=False, alias="QDRANT_SEARCH_EXACT")
 
     # HF Text Embeddings Inference (TEI)
     tei_url: str = Field(default="http://localhost:8080", alias="TEI_URL")
@@ -97,8 +99,8 @@ class CrawlerrSettings(BaseSettings):
     @field_validator("embedding_workers")
     @classmethod
     def validate_embedding_workers(cls, v: int) -> int:
-        if not 1 <= v <= 32:
-            raise ValueError("embedding_workers must be between 1 and 32")
+        if not 1 <= v <= 16:
+            raise ValueError("embedding_workers must be between 1 and 16")
         return v
 
     @field_validator("browser_pool_size")
@@ -106,6 +108,62 @@ class CrawlerrSettings(BaseSettings):
     def validate_browser_pool_size(cls, v: int) -> int:
         if not 1 <= v <= 20:
             raise ValueError("browser_pool_size must be between 1 and 20")
+        return v
+
+    @field_validator("browser_type")
+    @classmethod
+    def validate_browser_type(cls, v: str) -> str:
+        allowed_types = {"chromium", "firefox", "webkit"}
+        if v.lower() not in allowed_types:
+            raise ValueError(f"browser_type must be one of {allowed_types}")
+        return v.lower()
+
+    @field_validator("browser_extra_args")
+    @classmethod
+    def validate_browser_extra_args(cls, v: list[str]) -> list[str]:
+        # Whitelist of safe flags that won't break headless mode
+        safe_flags = {
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu-sandbox",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features",
+            "--process-per-site",
+            "--aggressive-cache-discard",
+            "--memory-pressure-off",
+            "--no-zygote",
+            "--max_old_space_size",
+            "--js-flags",
+            "--renderer-process-limit",
+            "--max-renderer-processes",
+            "--enable-accelerated-2d-canvas",
+            "--enable-gpu-compositing",
+            "--enable-gpu-rasterization",
+            "--enable-zero-copy",
+            "--enable-oop-rasterization",
+        }
+
+        for arg in v:
+            if not arg.startswith("--"):
+                raise ValueError(f"Browser arg must start with '--': {arg}")
+            flag_name = arg.split("=")[0]
+            if not any(flag_name.startswith(safe) for safe in safe_flags):
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Potentially unsafe browser flag: {arg}")
+        return v
+
+    @field_validator("browser_hardware_profile")
+    @classmethod
+    def validate_browser_hardware_profile(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        allowed_profiles = {"rtx4070_i7", "high_memory", "basic"}
+        if v not in allowed_profiles:
+            raise ValueError(
+                f"browser_hardware_profile must be one of {allowed_profiles} or None"
+            )
         return v
 
     # GPU flag validation removed - no longer using custom Chrome flags
@@ -154,6 +212,17 @@ class CrawlerrSettings(BaseSettings):
     # Performance Optimization Configuration
     crawl_enable_streaming: bool = Field(default=True, alias="CRAWL_ENABLE_STREAMING")
     crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
+
+    # Browser Configuration
+    browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
+    browser_type: str = Field(default="chromium", alias="BROWSER_TYPE")
+    browser_verbose: bool = Field(default=False, alias="BROWSER_VERBOSE")
+    browser_extra_args: list[str] = Field(
+        default_factory=list, alias="BROWSER_EXTRA_ARGS"
+    )
+    browser_hardware_profile: str | None = Field(
+        default=None, alias="BROWSER_HARDWARE_PROFILE"
+    )
 
     # High-Performance Configuration (i7-13700k + RTX 4070)
     browser_pool_size: int = Field(default=8, alias="BROWSER_POOL_SIZE", ge=1, le=16)
@@ -252,6 +321,71 @@ class CrawlerrSettings(BaseSettings):
         default=True,
         alias="PRESERVE_UNCHANGED_METADATA",
         description="Preserve metadata for unchanged chunks during re-crawls",
+    )
+
+    # Directory Crawling Configuration
+    directory_excluded_extensions: list[str] = Field(
+        default=[
+            # Binary executables and libraries
+            ".exe",
+            ".dll",
+            ".so",
+            ".dylib",
+            ".bin",
+            ".obj",
+            ".o",
+            # Images
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".ico",
+            ".tiff",
+            ".webp",
+            ".svg",
+            # Audio/Video
+            ".mp3",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".flv",
+            ".wav",
+            ".mkv",
+            ".webm",
+            # Archives
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".7z",
+            ".rar",
+            ".xz",
+            # Documents (can be made configurable for future PDF/Office extraction)
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            # Other binary formats
+            ".iso",
+            ".dmg",
+            ".pkg",
+            ".deb",
+            ".rpm",
+        ],
+        alias="DIRECTORY_EXCLUDED_EXTENSIONS",
+        description="File extensions to exclude when crawling directories",
+    )
+    directory_max_file_size_mb: int = Field(
+        default=10,
+        alias="DIRECTORY_MAX_FILE_SIZE_MB",
+        ge=1,
+        le=100,
+        description="Maximum file size in MB to process when crawling directories",
     )
 
     # CORS & Security

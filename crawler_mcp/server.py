@@ -16,16 +16,12 @@ warnings.filterwarnings(
     message="Support for class-based.*config.*is deprecated.*",
     category=DeprecationWarning,
 )
-# More comprehensive pattern to catch all BeautifulSoup 'text' deprecation warnings
+# Suppress BeautifulSoup 'text' argument deprecation warnings only from bs4 module
 warnings.filterwarnings(
     "ignore",
-    message=".*'text'.*argument.*find.*deprecated.*",
+    message=r"The 'text' argument to find\(\)-type methods is deprecated\. Use 'string' instead\.",
     category=DeprecationWarning,
-)
-warnings.filterwarnings(
-    "ignore",
-    message="The 'text' argument to find\\(\\)-type methods is deprecated.*",
-    category=DeprecationWarning,
+    module="bs4",
 )
 
 import asyncio  # noqa: E402

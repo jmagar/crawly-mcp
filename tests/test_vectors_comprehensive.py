@@ -9,6 +9,8 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
+from qdrant_client.models import UpdateStatus
 
 from crawler_mcp.config import settings
 from crawler_mcp.core.vectors import VectorService
@@ -259,8 +261,6 @@ class TestVectorServiceComprehensive:
                 mock_qdrant_client.collection_exists.return_value = True
 
                 # Mock successful deletion using UpdateStatus
-                from qdrant_client.models import UpdateStatus
-
                 mock_qdrant_client.delete.return_value = MagicMock(
                     operation_id=0, status=UpdateStatus.COMPLETED
                 )
@@ -383,8 +383,6 @@ class TestVectorServiceComprehensive:
                 query_vector = [0.1, 0.2, 0.3] * 128
 
                 # Should raise ToolError on search failure
-                from fastmcp.exceptions import ToolError
-
                 with pytest.raises(ToolError, match="Vector search failed"):
                     await service.search_similar(query_vector)
 

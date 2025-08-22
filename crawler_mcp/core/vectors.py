@@ -6,14 +6,17 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from dateutil import parser as date_parser
 from fastmcp.exceptions import ToolError
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    HnswConfigDiff,
     MatchAny,
     MatchValue,
+    OptimizersConfigDiff,
     PointStruct,
     SearchParams,
     UpdateStatus,
@@ -24,6 +27,22 @@ from ..config import settings
 from ..models.rag import DocumentChunk, SearchMatch
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_timestamp(timestamp_value: Any) -> datetime:
+    """
+    Parse timestamp from various formats to datetime.
+    Handles ISO strings, datetime objects, and empty values.
+    """
+    if isinstance(timestamp_value, datetime):
+        return timestamp_value
+    if isinstance(timestamp_value, str) and timestamp_value:
+        try:
+            return date_parser.parse(timestamp_value)
+        except (ValueError, TypeError):
+            logger.warning(f"Failed to parse timestamp: {timestamp_value}")
+    # Default to current time for invalid/empty timestamps
+    return datetime.utcnow()
 
 
 class VectorService:
@@ -122,16 +141,16 @@ class VectorService:
                     vectors_config=VectorParams(
                         size=self.vector_size, distance=self.distance
                     ),
-                    hnsw_config={
-                        "m": 16,  # Production value for accuracy/memory balance
-                        "ef_construct": 128,  # Build-time accuracy
-                        "max_indexing_threads": 0,  # Use all available threads
-                    },
-                    optimizers_config={
-                        "indexing_threshold": 20000,  # Batch indexing for performance
-                        "memmap_threshold": 50000,  # Memory management threshold
-                        "max_segment_size": 1000000,  # Optimize segment size
-                    },
+                    hnsw_config=HnswConfigDiff(
+                        m=16,  # Production value for accuracy/memory balance
+                        ef_construct=128,  # Build-time accuracy
+                        max_indexing_threads=0,  # Use all available threads
+                    ),
+                    optimizers_config=OptimizersConfigDiff(
+                        indexing_threshold=20000,  # Batch indexing for performance
+                        memmap_threshold=50000,  # Memory management threshold
+                        max_segment_size=1_000_000,  # Optimize segment size
+                    ),
                 )
             except Exception as e:
                 if "client has been closed" in str(e):
@@ -144,16 +163,16 @@ class VectorService:
                         vectors_config=VectorParams(
                             size=self.vector_size, distance=self.distance
                         ),
-                        hnsw_config={
-                            "m": 16,  # Production value for accuracy/memory balance
-                            "ef_construct": 128,  # Build-time accuracy
-                            "max_indexing_threads": 0,  # Use all available threads
-                        },
-                        optimizers_config={
-                            "indexing_threshold": 20000,  # Batch indexing for performance
-                            "memmap_threshold": 50000,  # Memory management threshold
-                            "max_segment_size": 1000000,  # Optimize segment size
-                        },
+                        hnsw_config=HnswConfigDiff(
+                            m=16,  # Production value for accuracy/memory balance
+                            ef_construct=128,  # Build-time accuracy
+                            max_indexing_threads=0,  # Use all available threads
+                        ),
+                        optimizers_config=OptimizersConfigDiff(
+                            indexing_threshold=20000,  # Batch indexing for performance
+                            memmap_threshold=50000,  # Memory management threshold
+                            max_segment_size=1_000_000,  # Optimize segment size
+                        ),
                     )
                 else:
                     raise
@@ -320,12 +339,23 @@ class VectorService:
                     FieldCondition(key="source_url", match=MatchAny(any=source_filter))
                 )
 
-            # Skip date range filtering for now due to Qdrant API limitations
-            # TODO: Implement proper timestamp filtering when Qdrant supports it
+            # Add date range filtering using Qdrant's range filter
             if date_range:
-                # Placeholder for future date range filtering
-                # Can be implemented with custom filtering after retrieval
-                pass
+                from qdrant_client.models import Range
+
+                if "start" in date_range:
+                    start_timestamp = _parse_timestamp(date_range["start"]).isoformat()
+                    filter_conditions.append(
+                        FieldCondition(
+                            key="timestamp", range=Range(gte=start_timestamp)
+                        )
+                    )
+
+                if "end" in date_range:
+                    end_timestamp = _parse_timestamp(date_range["end"]).isoformat()
+                    filter_conditions.append(
+                        FieldCondition(key="timestamp", range=Range(lte=end_timestamp))
+                    )
 
             # Prepare search request
             search_filter = None
@@ -347,15 +377,16 @@ class VectorService:
                 with_payload=True,
                 with_vectors=False,  # Don't return vectors to save bandwidth
                 search_params=SearchParams(
-                    hnsw_ef=ef_value
-                ),  # Dynamic ef for optimal speed/accuracy
+                    hnsw_ef=ef_value,
+                    exact=settings.qdrant_search_exact,
+                ),  # Dynamic ef with configurable exact-search toggle
             )
 
             # Extract results - handle different return types from query_points
             results: list[Any] = []
             if hasattr(query_response, "points"):
                 results = query_response.points
-            elif isinstance(query_response, (tuple, list)) and len(query_response) > 0:
+            elif isinstance(query_response, (tuple, list)) and len(query_response) > 0:  # noqa: UP038
                 results = query_response[0]
             else:
                 # Cast to list for consistent handling
@@ -385,7 +416,7 @@ class VectorService:
                     chunk_index=payload.get("chunk_index", 0),
                     word_count=payload.get("word_count", 0),
                     char_count=payload.get("char_count", 0),
-                    timestamp=payload.get("timestamp", ""),
+                    timestamp=_parse_timestamp(payload.get("timestamp", "")),
                     metadata={
                         k: v
                         for k, v in payload.items()
@@ -449,7 +480,7 @@ class VectorService:
                 chunk_index=payload.get("chunk_index", 0),
                 word_count=payload.get("word_count", 0),
                 char_count=payload.get("char_count", 0),
-                timestamp=payload.get("timestamp", ""),
+                timestamp=_parse_timestamp(payload.get("timestamp", "")),
                 metadata={
                     k: v
                     for k, v in payload.items()
@@ -722,7 +753,11 @@ class VectorService:
                         from urllib.parse import urlparse
 
                         parsed_url = urlparse(source_url)
-                        if parsed_url.netloc not in domains:
+                        host = parsed_url.netloc.lower()
+                        domains_lc = {d.lower() for d in domains}
+                        if not any(
+                            host == d or host.endswith(f".{d}") for d in domains_lc
+                        ):
                             continue
 
                     # Apply search term filtering

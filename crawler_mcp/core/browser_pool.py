@@ -1,24 +1,86 @@
 """
 High-performance browser pool for concurrent operations.
 
-Optimized for i7-13700k + RTX 4070 hardware configuration.
+Configurable for different hardware setups and environments.
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
+from ..config import settings
+
 logger = logging.getLogger(__name__)
+
+# Safe default browser arguments that work in all environments
+SAFE_DEFAULT_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+]
+
+# Hardware-specific profiles for optional optimization
+HARDWARE_PROFILES = {
+    "rtx4070_i7": [
+        # RTX 4070 + i7-13700k optimized Chrome flags
+        "--disable-gpu-sandbox",
+        "--max_old_space_size=4096",  # 4GB per browser instance
+        "--js-flags=--max-old-space-size=4096",
+        "--renderer-process-limit=4",  # Limit renderer processes
+        "--process-per-site",
+        "--aggressive-cache-discard",
+        "--memory-pressure-off",
+        "--enable-gpu-rasterization",
+        "--enable-zero-copy",
+        "--enable-oop-rasterization",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-features=TranslateUI",
+        "--no-zygote",  # Better for concurrent instances
+        "--max-renderer-processes=4",
+        "--enable-accelerated-2d-canvas",
+        "--enable-gpu-compositing",
+    ],
+    "high_memory": [
+        "--max_old_space_size=8192",  # 8GB per browser instance
+        "--js-flags=--max-old-space-size=8192",
+        "--renderer-process-limit=8",
+        "--max-renderer-processes=8",
+        "--aggressive-cache-discard",
+        "--memory-pressure-off",
+    ],
+    "basic": [
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--renderer-process-limit=2",
+        "--max-renderer-processes=2",
+    ],
+}
+
+
+def _deduplicate_args(args: list[str]) -> list[str]:
+    """Remove duplicate arguments, keeping the last occurrence."""
+    seen = set()
+    result = []
+    for arg in reversed(args):
+        # Extract the flag name (before '=' if present)
+        flag_name = arg.split("=")[0]
+        if flag_name not in seen:
+            seen.add(flag_name)
+            result.append(arg)
+    return list(reversed(result))
 
 
 class HighPerformanceBrowserPool:
-    """Browser pool optimized for i7-13700k + RTX 4070."""
+    """Configurable high-performance browser pool for concurrent operations."""
 
     def __init__(self, pool_size: int = 8):
         self.pool_size = pool_size
         self.browsers: list[Any] = []  # Will be AsyncWebCrawler instances
         self.available_browsers: asyncio.Queue[Any] = asyncio.Queue(maxsize=pool_size)
         self.is_initialized = False
+        self._init_lock = asyncio.Lock()
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
     async def initialize(self) -> None:
@@ -26,70 +88,76 @@ class HighPerformanceBrowserPool:
         if self.is_initialized:
             return
 
-        try:
-            # Import here to avoid circular imports
-            from crawl4ai import AsyncWebCrawler, BrowserConfig
+        async with self._init_lock:
+            # Re-check inside the lock to prevent race condition
+            if self.is_initialized:
+                return
 
-            # Hardware-optimized browser configuration
-            browser_config = BrowserConfig(
-                headless=True,
-                browser_type="chromium",
-                verbose=False,
-                # RTX 4070 + i7-13700k optimized Chrome flags
-                extra_args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu-sandbox",
-                    "--max_old_space_size=4096",  # 4GB per browser instance
-                    "--js-flags=--max-old-space-size=4096",
-                    "--renderer-process-limit=4",  # Limit renderer processes
-                    "--process-per-site",
-                    "--aggressive-cache-discard",
-                    "--memory-pressure-off",
-                    "--enable-gpu-rasterization",
-                    "--enable-zero-copy",
-                    "--enable-oop-rasterization",
-                    "--disable-background-timer-throttling",
-                    "--disable-backgrounding-occluded-windows",
-                    "--disable-renderer-backgrounding",
-                    "--disable-features=TranslateUI",
-                    "--no-zygote",  # Better for concurrent instances
-                    # Performance optimizations for high-end hardware
-                    "--max-renderer-processes=4",
-                    "--renderer-process-limit=4",
-                    "--enable-accelerated-2d-canvas",
-                    "--enable-gpu-compositing",
-                ],
-            )
+            try:
+                # Import here to avoid circular imports
+                from crawl4ai import AsyncWebCrawler, BrowserConfig
 
-            self.logger.info(
-                f"Initializing browser pool with {self.pool_size} browsers"
-            )
+                # Build browser arguments from configuration
+                browser_args = SAFE_DEFAULT_ARGS.copy()
 
-            # Create browser instances
-            for i in range(self.pool_size):
-                try:
-                    browser = AsyncWebCrawler(config=browser_config)
-                    await browser.__aenter__()
-                    self.browsers.append(browser)
-                    await self.available_browsers.put(browser)
-                    self.logger.debug(f"Initialized browser {i + 1}/{self.pool_size}")
-                except Exception as e:
-                    self.logger.error(f"Failed to initialize browser {i + 1}: {e}")
-                    # Continue with fewer browsers rather than failing completely
+                # Add hardware profile if specified
+                if settings.browser_hardware_profile:
+                    profile_args = HARDWARE_PROFILES.get(
+                        settings.browser_hardware_profile, []
+                    )
+                    browser_args.extend(profile_args)
+                    logger.info(
+                        f"Using hardware profile: {settings.browser_hardware_profile}"
+                    )
 
-            if not self.browsers:
-                raise RuntimeError("Failed to initialize any browsers")
+                # Add user-specified extra arguments
+                if settings.browser_extra_args:
+                    browser_args.extend(settings.browser_extra_args)
+                    logger.debug(
+                        f"Added {len(settings.browser_extra_args)} custom browser args"
+                    )
 
-            self.is_initialized = True
-            self.logger.info(
-                f"Browser pool initialized successfully with {len(self.browsers)} browsers"
-            )
+                # Deduplicate arguments (keeping last occurrence)
+                browser_args = _deduplicate_args(browser_args)
 
-        except Exception as e:
-            self.logger.error(f"Failed to initialize browser pool: {e}")
-            await self.cleanup()
-            raise
+                # Configuration-based browser setup
+                browser_config = BrowserConfig(
+                    headless=settings.browser_headless,
+                    browser_type=settings.browser_type,
+                    verbose=settings.browser_verbose,
+                    extra_args=browser_args,
+                )
+
+                self.logger.info(
+                    f"Initializing browser pool with {self.pool_size} browsers"
+                )
+
+                # Create browser instances
+                for i in range(self.pool_size):
+                    try:
+                        browser = AsyncWebCrawler(config=browser_config)
+                        await browser.__aenter__()
+                        self.browsers.append(browser)
+                        await self.available_browsers.put(browser)
+                        self.logger.debug(
+                            f"Initialized browser {i + 1}/{self.pool_size}"
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Failed to initialize browser {i + 1}: {e}")
+                        # Continue with fewer browsers rather than failing completely
+
+                if not self.browsers:
+                    raise RuntimeError("Failed to initialize any browsers")
+
+                self.is_initialized = True
+                self.logger.info(
+                    f"Browser pool initialized successfully with {len(self.browsers)} browsers"
+                )
+
+            except Exception as e:
+                self.logger.error(f"Failed to initialize browser pool: {e}")
+                await self.cleanup()
+                raise
 
     async def acquire(self) -> Any:
         """Get browser from pool."""
@@ -108,6 +176,19 @@ class HighPerformanceBrowserPool:
         except Exception as e:
             self.logger.error(f"Failed to return browser to pool: {e}")
 
+    @contextlib.asynccontextmanager
+    async def lease(self):
+        """Context manager for safe browser acquisition and release."""
+        browser = None
+        try:
+            browser = await self.acquire()
+            self.logger.debug("Browser leased via context manager")
+            yield browser
+        finally:
+            if browser is not None:
+                await self.release(browser)
+                self.logger.debug("Browser returned via context manager")
+
     async def cleanup(self) -> None:
         """Cleanup all browsers."""
         self.logger.info("Cleaning up browser pool")
@@ -121,11 +202,14 @@ class HighPerformanceBrowserPool:
 
         self.browsers.clear()
 
-        # Clear the queue
+        # Clear the queue and mark tasks as done
         while not self.available_browsers.empty():
             try:
                 self.available_browsers.get_nowait()
+                # Mark the task as done to allow queue.join() to complete
+                self.available_browsers.task_done()
             except asyncio.QueueEmpty:
+                # Queue is empty, nothing more to drain
                 break
 
         self.is_initialized = False
@@ -160,7 +244,14 @@ async def get_browser_pool(pool_size: int = 8) -> HighPerformanceBrowserPool:
     global _browser_pool
 
     if _browser_pool is None:
-        _browser_pool = HighPerformanceBrowserPool(pool_size=pool_size)
+        # Try to get pool size from config, fallback to provided or default value
+        try:
+            from crawler_mcp.config import settings
+
+            size = getattr(settings, "browser_pool_size", pool_size)
+        except Exception:
+            size = pool_size
+        _browser_pool = HighPerformanceBrowserPool(pool_size=size)
 
     return _browser_pool
 

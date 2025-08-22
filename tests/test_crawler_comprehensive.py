@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from crawler_mcp.crawlers.base import BaseCrawlStrategy
 from crawler_mcp.crawlers.directory import DirectoryCrawlStrategy, DirectoryRequest
@@ -32,16 +33,16 @@ class TestWebCrawlStrategyComprehensive:
         crawler = WebCrawlStrategy()
 
         # Test Pydantic validation errors (these should raise ValidationError)
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             CrawlRequest(url="https://example.com", max_pages=0)
 
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             CrawlRequest(url="https://example.com", max_pages=3000)
 
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             CrawlRequest(url="https://example.com", max_depth=0)
 
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             CrawlRequest(url="https://example.com", max_depth=11)
 
         # Test validate_request method behavior for edge cases that pass Pydantic
@@ -152,11 +153,6 @@ class TestWebCrawlStrategyComprehensive:
             **{"fit_markdown": test_content, "raw_markdown": test_content}
         )
 
-        # Make sure it's not an integer and is truthy
-        assert not isinstance(mock_markdown, int)
-        assert bool(
-            mock_markdown
-        )  # Ensure it's truthy for the "if not result.markdown:" check
         mock_crawl4ai_result.markdown = mock_markdown
 
         mock_crawl4ai_result.media = {"images": [], "videos": []}
@@ -374,10 +370,9 @@ class TestRepositoryCrawlStrategyComprehensive:
                 patch.object(crawler, "pre_execute_setup", new_callable=AsyncMock),
                 patch.object(crawler, "post_execute_cleanup", new_callable=AsyncMock),
                 patch.object(crawler, "_initialize_managers", new_callable=AsyncMock),
+                patch.object(crawler, "_clone_repository", return_value=repo_dir),
             ):
-                # Mock the clone directory to return our test structure
-                with patch.object(crawler, "_clone_repository", return_value=repo_dir):
-                    result = await crawler.execute(request)
+                result = await crawler.execute(request)
 
                     # Verify results
                     assert isinstance(result, CrawlResult)

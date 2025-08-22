@@ -355,7 +355,6 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
     def _sanitize_crawl_result(self, result: Crawl4aiResult) -> Crawl4aiResult:
         """Sanitize CrawlResult to prevent integer hash issues with markdown field."""
-        import sys
 
         from ..types.crawl4ai_types import (
             MarkdownGenerationResultImpl as MarkdownGenerationResult,
@@ -364,10 +363,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         try:
             # Check if the private _markdown field contains an integer hash
             if hasattr(result, "_markdown") and isinstance(result._markdown, int):
-                print(
-                    f"CRAWL DEBUG - Found integer _markdown ({result._markdown}), replacing with empty MarkdownGenerationResult",
-                    file=sys.stderr,
-                    flush=True,
+                logger.debug(
+                    "Found integer _markdown (%s), replacing with empty MarkdownGenerationResult",
+                    result._markdown,
                 )
                 # Replace the integer hash with an empty MarkdownGenerationResult
                 result._markdown = MarkdownGenerationResult(
@@ -386,10 +384,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     _ = result.markdown
                 except AttributeError as e:
                     if "'int' object has no attribute" in str(e):
-                        print(
-                            f"CRAWL DEBUG - Markdown property access failed, force setting safe value for {result.url}",
-                            file=sys.stderr,
-                            flush=True,
+                        logger.debug(
+                            "Markdown property access failed, force setting safe value for %s",
+                            result.url,
                         )
                         # Force set a safe markdown value
                         result._markdown = MarkdownGenerationResult(
@@ -400,10 +397,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                             fit_html=None,
                         )
         except Exception as e:
-            print(
-                f"CRAWL DEBUG - Sanitization warning for {getattr(result, 'url', 'unknown')}: {e}",
-                file=sys.stderr,
-                flush=True,
+            logger.debug(
+                "Sanitization warning for %s: %s",
+                getattr(result, "url", "unknown"),
+                e,
+                exc_info=True,
             )
 
         return result
@@ -531,7 +529,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         timeout_val = getattr(settings, "crawler_timeout", 30000)
         page_timeout = (
             int(timeout_val * 1000)
-            if isinstance(timeout_val, (int, float)) and timeout_val < 1000
+            if isinstance(timeout_val, int | float) and timeout_val < 1000
             else int(timeout_val)
         )
 
@@ -1019,7 +1017,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         progress_callback: Any,
     ) -> tuple[list[Any], list[str]]:
         """Crawl using arun_many() with discovered sitemap URLs."""
-        from crawl4ai import MemoryAdaptiveDispatcher  # type: ignore
+        try:
+            from crawl4ai import MemoryAdaptiveDispatcher  # type: ignore
+        except ImportError as e:
+            logger.error(
+                "MemoryAdaptiveDispatcher not available from crawl4ai: %s. "
+                "Falling back to sequential crawling.",
+                e,
+            )
+            MemoryAdaptiveDispatcher = None
+        except Exception as e:
+            logger.error(
+                "Unexpected error importing MemoryAdaptiveDispatcher: %s. "
+                "Falling back to sequential crawling.",
+                e,
+            )
+            MemoryAdaptiveDispatcher = None
 
         successful_results: list[Any] = []
         errors: list[str] = []
@@ -1028,6 +1041,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
         # Limit sitemap URLs to max_pages
         urls_to_crawl = sitemap_urls[:max_pages]
+
+        # Check if MemoryAdaptiveDispatcher is available
+        if MemoryAdaptiveDispatcher is None:
+            logger.warning(
+                "MemoryAdaptiveDispatcher unavailable, falling back to sequential crawling"
+            )
+            # Fallback to sequential crawling
+            for url in urls_to_crawl:
+                try:
+                    result = await crawler.arun(url=url, config=run_config)
+                    successful_results.append(result)
+                except Exception as e:
+                    error_msg = f"Error crawling {url}: {e}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+            return successful_results, errors
 
         self.logger.info(
             f"Creating MemoryAdaptiveDispatcher with max_session_permit={max_concurrent}"

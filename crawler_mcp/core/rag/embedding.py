@@ -122,29 +122,67 @@ class EmbeddingWorker:
         start_time = time.time()
 
         try:
-            # Use true batch processing for maximum speed
-            if len(texts) <= 512:  # Our extreme true batch threshold
-                embedding_results = (
-                    await self.embedding_service.generate_embeddings_true_batch(texts)
-                )
-            else:
-                embedding_results = (
-                    await self.embedding_service.generate_embeddings_batch(
-                        texts, batch_size=settings.tei_batch_size
-                    )
-                )
+            # Check cache for existing embeddings
+            import hashlib
 
-            # Extract just the embedding vectors
-            embeddings = [result.embedding for result in embedding_results]
+            cached_embeddings = []
+            uncached_texts = []
+            text_hashes = []
+
+            for text in texts:
+                # Generate stable hash of normalized text content
+                normalized_text = text.strip().lower()
+                text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+                text_hashes.append(text_hash)
+
+                cached_embedding = self.cache.get_cached_embedding(text_hash)
+                if cached_embedding is not None:
+                    cached_embeddings.append(cached_embedding)
+                    uncached_texts.append(None)  # Placeholder for cached item
+                else:
+                    cached_embeddings.append(None)  # Placeholder for uncached item
+                    uncached_texts.append(text)
+
+            # Generate embeddings for uncached texts only
+            if any(text is not None for text in uncached_texts):
+                texts_to_embed = [text for text in uncached_texts if text is not None]
+
+                # Use true batch processing for maximum speed
+                if len(texts_to_embed) <= 512:  # Our extreme true batch threshold
+                    embedding_results = (
+                        await self.embedding_service.generate_embeddings_true_batch(
+                            texts_to_embed
+                        )
+                    )
+                else:
+                    embedding_results = (
+                        await self.embedding_service.generate_embeddings_batch(
+                            texts_to_embed, batch_size=settings.tei_batch_size
+                        )
+                    )
+
+                # Extract embedding vectors and cache them
+                new_embeddings = [result.embedding for result in embedding_results]
+                embedding_idx = 0
+
+                for i, (text, text_hash) in enumerate(
+                    zip(uncached_texts, text_hashes, strict=False)
+                ):
+                    if text is not None:  # This was an uncached text
+                        embedding = new_embeddings[embedding_idx]
+                        cached_embeddings[i] = embedding
+                        self.cache.cache_embedding(text_hash, embedding)
+                        embedding_idx += 1
 
             self.processed_count += len(texts)
             self.total_processing_time += time.time() - start_time
 
             logger.debug(
-                f"Worker {self.worker_id} processed batch of {len(texts)} texts"
+                f"Worker {self.worker_id} processed batch of {len(texts)} texts "
+                f"(cache hits: {self.cache.cache_hits}, misses: {self.cache.cache_misses})"
             )
 
-            return embeddings
+            return cached_embeddings
 
         except Exception as e:
             self.error_count += 1
@@ -356,11 +394,12 @@ class EmbeddingPipeline:
 
         # Flatten results
         all_embeddings = []
-        for result in batch_results:
+        for i, result in enumerate(batch_results):
             if isinstance(result, Exception):
                 logger.error(f"Batch processing failed: {result}")
-                # Add empty embeddings for failed batch
-                all_embeddings.extend([[] for _ in range(batch_size)])
+                # Mark failed items clearly so upstream can decide to skip them
+                batch_texts = text_batches[i]
+                all_embeddings.extend([None for _ in batch_texts])
             else:
                 all_embeddings.extend(result)
 
@@ -371,6 +410,7 @@ class EmbeddingPipeline:
         document_chunks: list[DocumentChunk],
         progress_callback: Callable | None = None,
         base_progress: int = 0,
+        persist: bool = False,
     ) -> int:
         """
         Process embeddings using parallel pipeline for maximum performance.
@@ -466,8 +506,8 @@ class EmbeddingPipeline:
                             if chunk.embedding is not None and len(chunk.embedding) > 0
                         ]
 
-                        if valid_chunks:
-                            # Store chunks in Qdrant concurrently
+                        if valid_chunks and persist:
+                            # Store chunks in Qdrant concurrently (only if persist=True)
                             await self.vector_service.upsert_documents(valid_chunks)
 
                         nonlocal storage_completed
@@ -502,11 +542,12 @@ class EmbeddingPipeline:
             for batch_id, chunk_batch in enumerate(chunk_batches)
         ]
 
-        # Start storage worker
-        storage_task = storage_worker()
+        # Start multiple storage workers equal to max_concurrent_storage_ops
+        num_storage_workers = min(max_concurrent_storage_ops, len(chunk_batches))
+        storage_tasks = [storage_worker() for _ in range(num_storage_workers)]
 
         # Execute all tasks truly in parallel
-        await asyncio.gather(*embedding_tasks, storage_task, return_exceptions=True)
+        await asyncio.gather(*embedding_tasks, *storage_tasks, return_exceptions=True)
 
         logger.info(
             f"Parallel pipeline completed: {embeddings_completed} embeddings generated, "

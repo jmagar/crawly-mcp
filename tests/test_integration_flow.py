@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 
 class TestIntegrationFlows:
@@ -187,7 +188,7 @@ class TestIntegrationFlows:
     async def test_error_handling_workflow(self, mcp_client: Client):
         """Test error handling across different scenarios."""
         # Test 1: Invalid scrape URL
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "scrape",
                 {
@@ -196,7 +197,7 @@ class TestIntegrationFlows:
             )
 
         # Test 2: Invalid crawl target
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "crawl",
                 {
@@ -205,7 +206,7 @@ class TestIntegrationFlows:
             )
 
         # Test 3: Delete non-existent source
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "delete_source",
                 {
@@ -214,7 +215,7 @@ class TestIntegrationFlows:
             )
 
         # Test 4: Invalid RAG query parameters
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             await mcp_client.call_tool(
                 "rag_query",
                 {
@@ -235,8 +236,6 @@ class TestIntegrationFlows:
     ):
         """Test concurrent operations don't interfere with each other."""
         import asyncio
-
-        directory_path = sample_text_files[0].parent
 
         # Create multiple concurrent operations
         tasks = []

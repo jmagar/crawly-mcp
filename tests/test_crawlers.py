@@ -5,7 +5,7 @@ This module focuses on testing crawler validation, initialization,
 and basic functionality to maximize code coverage.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -167,9 +167,12 @@ class TestRepositoryCrawlStrategy:
             cleanup_after=True,
         )
 
+        # Mock git availability to make test deterministic
+        crawler._check_git_available = AsyncMock(return_value=True)
+
         is_valid = await crawler.validate_request(request)
-        # Should handle repository URLs (may require git to be installed)
-        assert is_valid in [True, False]
+        # Should be valid since it's a proper GitHub URL format and git is "available"
+        assert is_valid is True
 
     @pytest.mark.unit
     async def test_validate_request_git_url(self):
@@ -183,8 +186,12 @@ class TestRepositoryCrawlStrategy:
             cleanup_after=True,
         )
 
+        # Mock git availability to make test deterministic
+        crawler._check_git_available = AsyncMock(return_value=True)
+
         is_valid = await crawler.validate_request(request)
-        assert is_valid in [True, False]
+        # Should be valid since it's a proper git SSH URL format and git is "available"
+        assert is_valid is True
 
     @pytest.mark.unit
     async def test_validate_request_invalid_repo_url(self):
@@ -226,58 +233,60 @@ class TestCrawlerEdgeCases:
     @pytest.mark.unit
     async def test_empty_request_handling(self):
         """Test how crawlers handle empty/minimal requests."""
-        # Test each crawler with its appropriate request type
+        # Test web crawler with invalid URL - should return False or raise ValueError
         web_crawler = WebCrawlStrategy()
         web_request = CrawlRequest(url="test")
 
-        try:
-            result = await web_crawler.validate_request(web_request)
-            assert result in [True, False]
-        except Exception:
-            # Some crawlers might throw exceptions for invalid URLs
-            # This is acceptable behavior
-            pass
+        result = await web_crawler.validate_request(web_request)
+        # Invalid URL should return False
+        assert result is False
 
-        # Test directory crawler
+        # Test directory crawler with non-existent path - should return False
         dir_crawler = DirectoryCrawlStrategy()
         dir_request = DirectoryRequest(directory_path="test")
 
-        try:
-            result = await dir_crawler.validate_request(dir_request)
-            assert result in [True, False]
-        except Exception:
-            # Some crawlers might throw exceptions for invalid paths
-            # This is acceptable behavior
-            pass
+        result = await dir_crawler.validate_request(dir_request)
+        # Non-existent directory should return False
+        assert result is False
 
-        # Test repository crawler
+        # Test repository crawler with invalid repo URL - needs git mocking
         repo_crawler = RepositoryCrawlStrategy()
         repo_request = RepositoryRequest(repo_url="test")
 
-        try:
-            result = await repo_crawler.validate_request(repo_request)
-            assert result in [True, False]
-        except Exception:
-            # Some crawlers might throw exceptions for invalid repo URLs
-            # This is acceptable behavior
-            pass
+        # Mock git availability for deterministic test
+        repo_crawler._check_git_available = AsyncMock(return_value=True)
+
+        result = await repo_crawler.validate_request(repo_request)
+        # Invalid repo URL should return False even with git available
+        assert result is False
 
 
 class TestCrawlerConfiguration:
     """Test crawler configuration and settings integration."""
 
     @pytest.mark.unit
-    def test_web_crawler_uses_settings(self):
+    async def test_web_crawler_uses_settings(self):
         """Test that web crawler accesses configuration settings."""
         crawler = WebCrawlStrategy()
 
-        # This will exercise settings access during validation
+        # This will exercise settings access during run config building
         with patch("crawler_mcp.crawlers.web.settings") as mock_settings:
             mock_settings.crawl_headless = True
             mock_settings.crawl_browser = "chromium"
+            mock_settings.crawl_enable_caching = True
+            mock_settings.crawler_timeout = 30000
+            mock_settings.crawl_max_pages = 1
+            mock_settings.crawl_max_depth = 1
 
-            # Just instantiating should exercise some settings access
-            assert crawler is not None
+            # Create a test request and build run config to exercise settings access
+            request = CrawlRequest(url="https://example.com")
+            run_config = await crawler._build_run_config(request)
+
+            # Verify that the method completed successfully and returned a config object
+            assert run_config is not None
+            # Verify settings were accessed by checking mock calls
+            assert mock_settings.crawl_headless is True
+            assert mock_settings.crawl_browser == "chromium"
 
     @pytest.mark.unit
     async def test_crawler_boundary_values(self):

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Base crawling strategy with common functionality.
 """
@@ -27,7 +29,13 @@ class BaseCrawlStrategy(ABC):
     async def _initialize_managers(self) -> None:
         """Initializes the memory manager."""
         if not self.memory_manager:
-            from ..core.memory import get_memory_manager
+            try:
+                from ..core.memory import get_memory_manager
+            except (ImportError, ModuleNotFoundError) as e:
+                raise ImportError(
+                    "Failed to import get_memory_manager from crawler_mcp.core.memory. "
+                    "Please ensure the memory module is properly installed and the import path is correct."
+                ) from e
 
             self.memory_manager = get_memory_manager()
 

@@ -838,3 +838,33 @@ class VectorService:
                 "filters_applied": {"domains": domains, "search_term": search_term},
                 "error": str(e),
             }
+
+
+# Feature flag support for modular vector implementation
+def create_vector_service():
+    """
+    Create a VectorService instance based on configuration.
+    
+    Returns:
+        VectorService instance (either original or modular based on feature flag)
+    """
+    if settings.use_modular_vectors:
+        # Import and use modular implementation
+        from .vectors import VectorService as ModularVectorService
+        return ModularVectorService()
+    else:
+        # Use original implementation
+        return VectorService()
+
+
+# Backward compatibility - allows existing code to continue working
+# while enabling gradual migration to modular implementation
+if settings.use_modular_vectors:
+    try:
+        from .vectors import VectorService as ModularVectorService
+        # Replace the original VectorService with the modular one when flag is enabled
+        VectorService = ModularVectorService
+    except ImportError:
+        logger.warning(
+            "Modular vector service requested but not available, using original implementation"
+        )

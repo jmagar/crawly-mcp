@@ -1,0 +1,576 @@
+"""
+Embedding generation pipeline with parallel processing for RAG operations.
+
+This module provides high-performance embedding generation using parallel workers,
+queue management, and optimized batch processing for maximum throughput.
+"""
+
+import asyncio
+import logging
+import time
+from asyncio import Queue, Semaphore
+from collections.abc import Callable
+from typing import Any
+
+from ...config import settings
+from ...core.embeddings import EmbeddingService
+from ...core.vectors import VectorService
+from ...models.rag import DocumentChunk
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingCache:
+    """Caching layer for embedding operations."""
+
+    def __init__(self, max_size: int = 10000):
+        self.cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.max_size = max_size
+
+    def get_cached_embedding(self, text_hash: str) -> list[float] | None:
+        """
+        Get cached embedding for a text hash.
+
+        Args:
+            text_hash: Hash of the text content
+
+        Returns:
+            Cached embedding vector or None
+        """
+        if text_hash in self.cache:
+            self.cache_hits += 1
+            return self.cache[text_hash]
+
+        self.cache_misses += 1
+        return None
+
+    def cache_embedding(self, text_hash: str, embedding: list[float]) -> None:
+        """
+        Cache an embedding for future use.
+
+        Args:
+            text_hash: Hash of the text content
+            embedding: Embedding vector to cache
+        """
+        # If cache is full, remove oldest entry (simple FIFO)
+        if len(self.cache) >= self.max_size:
+            oldest_key = next(iter(self.cache))
+            del self.cache[oldest_key]
+
+        self.cache[text_hash] = embedding
+
+    def clear_cache(self) -> None:
+        """Clear all cached embeddings."""
+        self.cache.clear()
+        self.cache_hits = 0
+        self.cache_misses = 0
+
+    def get_cache_statistics(self) -> dict[str, int]:
+        """
+        Get cache performance statistics.
+
+        Returns:
+            Dictionary with cache statistics
+        """
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = self.cache_hits / total_requests if total_requests > 0 else 0
+
+        return {
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "total_requests": total_requests,
+            "hit_rate": hit_rate,
+            "cache_size": len(self.cache),
+            "max_cache_size": self.max_size,
+        }
+
+
+class EmbeddingWorker:
+    """Individual embedding worker for parallel processing."""
+
+    def __init__(self, worker_id: int):
+        self.worker_id = worker_id
+        self.embedding_service = None
+        self.processed_count = 0
+        self.error_count = 0
+        self.total_processing_time = 0.0
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Initialize the embedding service for this worker."""
+        if not self._initialized:
+            self.embedding_service = EmbeddingService()
+            await self.embedding_service.__aenter__()
+            self._initialized = True
+            logger.debug(f"Embedding worker {self.worker_id} initialized")
+
+    async def process_batch(self, texts: list[str]) -> list[list[float]]:
+        """
+        Process a batch of texts to generate embeddings.
+
+        Args:
+            texts: List of text strings to embed
+
+        Returns:
+            List of embedding vectors
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        start_time = time.time()
+
+        try:
+            # Use true batch processing for maximum speed
+            if len(texts) <= 512:  # Our extreme true batch threshold
+                embedding_results = (
+                    await self.embedding_service.generate_embeddings_true_batch(texts)
+                )
+            else:
+                embedding_results = (
+                    await self.embedding_service.generate_embeddings_batch(
+                        texts, batch_size=settings.tei_batch_size
+                    )
+                )
+
+            # Extract just the embedding vectors
+            embeddings = [result.embedding for result in embedding_results]
+
+            self.processed_count += len(texts)
+            self.total_processing_time += time.time() - start_time
+
+            logger.debug(
+                f"Worker {self.worker_id} processed batch of {len(texts)} texts"
+            )
+
+            return embeddings
+
+        except Exception as e:
+            self.error_count += 1
+            logger.error(f"Worker {self.worker_id} failed to process batch: {e}")
+            # Return empty embeddings for failed texts
+            return [[] for _ in texts]
+
+    async def shutdown(self) -> None:
+        """Shutdown the worker and clean up resources."""
+        if self._initialized and self.embedding_service:
+            await self.embedding_service.__aexit__(None, None, None)
+            self._initialized = False
+            logger.debug(f"Embedding worker {self.worker_id} shutdown")
+
+    def get_statistics(self) -> dict[str, Any]:
+        """
+        Get worker performance statistics.
+
+        Returns:
+            Dictionary with worker statistics
+        """
+        avg_processing_time = (
+            self.total_processing_time / self.processed_count
+            if self.processed_count > 0
+            else 0
+        )
+
+        return {
+            "worker_id": self.worker_id,
+            "processed_count": self.processed_count,
+            "error_count": self.error_count,
+            "total_processing_time": self.total_processing_time,
+            "avg_processing_time": avg_processing_time,
+            "success_rate": (
+                (self.processed_count - self.error_count) / self.processed_count
+                if self.processed_count > 0
+                else 1.0
+            ),
+        }
+
+
+class EmbeddingPipeline:
+    """High-performance embedding generation pipeline."""
+
+    def __init__(self):
+        self.embedding_service = None
+        self.vector_service = None
+        self.workers = []
+        self.cache = EmbeddingCache(max_size=1000)  # Default cache size
+        self.batch_size = settings.tei_batch_size
+        self.max_workers = settings.embedding_workers
+        self._pipeline_running = False
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Initialize the embedding pipeline."""
+        if not self._initialized:
+            self.embedding_service = EmbeddingService()
+            self.vector_service = VectorService()
+            await self.embedding_service.__aenter__()
+            await self.vector_service.__aenter__()
+            self._initialized = True
+            logger.info(
+                f"Embedding pipeline initialized with {self.max_workers} workers"
+            )
+
+    async def shutdown(self) -> None:
+        """Shutdown the embedding pipeline."""
+        if self._pipeline_running:
+            await self.stop_pipeline()
+
+        if self._initialized:
+            # Shutdown all workers
+            for worker in self.workers:
+                await worker.shutdown()
+            self.workers.clear()
+
+            # Shutdown services
+            if self.embedding_service:
+                await self.embedding_service.__aexit__(None, None, None)
+            if self.vector_service:
+                await self.vector_service.__aexit__(None, None, None)
+
+            self._initialized = False
+            logger.info("Embedding pipeline shutdown complete")
+
+    async def start_pipeline(self) -> None:
+        """Start the embedding pipeline with worker pool."""
+        if not self._initialized:
+            await self.initialize()
+
+        if not self._pipeline_running:
+            # Create worker pool
+            self.workers = [
+                EmbeddingWorker(worker_id) for worker_id in range(self.max_workers)
+            ]
+
+            # Initialize all workers
+            for worker in self.workers:
+                await worker.initialize()
+
+            self._pipeline_running = True
+            logger.info(f"Embedding pipeline started with {len(self.workers)} workers")
+
+    async def stop_pipeline(self) -> None:
+        """Stop the embedding pipeline."""
+        if self._pipeline_running:
+            # Shutdown all workers
+            for worker in self.workers:
+                await worker.shutdown()
+
+            self._pipeline_running = False
+            logger.info("Embedding pipeline stopped")
+
+    async def generate_embeddings(
+        self, texts: list[str], batch_size: int | None = None
+    ) -> list[list[float]]:
+        """
+        Generate embeddings for a list of texts.
+
+        Args:
+            texts: List of text strings to embed
+            batch_size: Optional batch size override
+
+        Returns:
+            List of embedding vectors
+        """
+        if not self._pipeline_running:
+            await self.start_pipeline()
+
+        if not texts:
+            return []
+
+        effective_batch_size = batch_size or self.batch_size
+
+        # Use single batch processing if within limits
+        if len(texts) <= effective_batch_size:
+            if self.workers:
+                return await self.workers[0].process_batch(texts)
+            else:
+                # Fallback to direct service call
+                embedding_results = (
+                    await self.embedding_service.generate_embeddings_batch(
+                        texts, batch_size=effective_batch_size
+                    )
+                )
+                return [result.embedding for result in embedding_results]
+
+        # Use parallel batch processing for larger sets
+        return await self._process_batches_parallel(texts, effective_batch_size)
+
+    async def process_chunks_parallel(
+        self,
+        chunks: list[DocumentChunk],
+        progress_callback: Callable | None = None,
+        base_progress: int = 0,
+    ) -> list[DocumentChunk]:
+        """
+        Process document chunks in parallel to generate embeddings.
+
+        Args:
+            chunks: List of document chunks to process
+            progress_callback: Optional progress callback
+            base_progress: Base progress offset for reporting
+
+        Returns:
+            List of chunks with embeddings attached
+        """
+        if not chunks:
+            return []
+
+        if not self._pipeline_running:
+            await self.start_pipeline()
+
+        start_time = time.time()
+
+        # Use the parallel pipeline processing for maximum performance
+        total_embeddings = await self._process_embeddings_pipeline(
+            chunks, progress_callback, base_progress
+        )
+
+        end_time = time.time()
+        duration = end_time - start_time
+
+        logger.info(
+            f"Generated {total_embeddings} embeddings in {duration:.2f}s - "
+            f"{total_embeddings / duration:.1f} embeddings/sec (parallel pipeline)"
+        )
+
+        return chunks
+
+    async def _process_batches_parallel(
+        self, texts: list[str], batch_size: int
+    ) -> list[list[float]]:
+        """Process texts in parallel batches using worker pool."""
+        # Split texts into batches
+        text_batches = [
+            texts[i : i + batch_size] for i in range(0, len(texts), batch_size)
+        ]
+
+        # Process batches in parallel using available workers
+        batch_tasks = []
+        for i, batch in enumerate(text_batches):
+            worker = self.workers[i % len(self.workers)]
+            batch_tasks.append(worker.process_batch(batch))
+
+        # Wait for all batches to complete
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+        # Flatten results
+        all_embeddings = []
+        for result in batch_results:
+            if isinstance(result, Exception):
+                logger.error(f"Batch processing failed: {result}")
+                # Add empty embeddings for failed batch
+                all_embeddings.extend([[] for _ in range(batch_size)])
+            else:
+                all_embeddings.extend(result)
+
+        return all_embeddings
+
+    async def _process_embeddings_pipeline(
+        self,
+        document_chunks: list[DocumentChunk],
+        progress_callback: Callable | None = None,
+        base_progress: int = 0,
+    ) -> int:
+        """
+        Process embeddings using parallel pipeline for maximum performance.
+
+        Uses multiple concurrent workers to:
+        1. Generate embeddings in parallel batches
+        2. Store vectors concurrently as they're ready
+        3. Provide real-time progress feedback
+
+        Args:
+            document_chunks: List of document chunks to process
+            progress_callback: Optional progress callback function
+            base_progress: Base progress offset for reporting
+
+        Returns:
+            Total number of embeddings generated
+        """
+        if not document_chunks:
+            return 0
+
+        # Configure pipeline parameters based on our optimized settings
+        max_concurrent_embedding_batches = min(
+            self.max_workers, (len(document_chunks) // 64) + 1
+        )  # Configurable parallel embedding workers
+        max_concurrent_storage_ops = 8  # 8 parallel storage operations
+        embedding_batch_size = self.batch_size  # 64 from our extreme config
+
+        # Create queues for pipeline stages
+        storage_queue: Queue = Queue(maxsize=max_concurrent_storage_ops * 2)
+
+        # Semaphores to control concurrency
+        embedding_semaphore = Semaphore(max_concurrent_embedding_batches)
+        storage_semaphore = Semaphore(max_concurrent_storage_ops)
+
+        # Split chunks into batches for embedding
+        chunk_batches = [
+            document_chunks[i : i + embedding_batch_size]
+            for i in range(0, len(document_chunks), embedding_batch_size)
+        ]
+
+        logger.info(
+            f"Starting parallel pipeline: {len(chunk_batches)} embedding batches, "
+            f"{max_concurrent_embedding_batches} embedding workers, "
+            f"{max_concurrent_storage_ops} storage workers"
+        )
+
+        # Progress tracking
+        embeddings_completed = 0
+        storage_completed = 0
+        total_chunks = len(document_chunks)
+
+        async def embedding_worker(batch_id: int, chunk_batch: list[DocumentChunk]):
+            """Worker to generate embeddings for a batch of chunks."""
+            async with embedding_semaphore:
+                try:
+                    texts = [chunk.content for chunk in chunk_batch]
+
+                    # Use worker pool for processing
+                    worker = self.workers[batch_id % len(self.workers)]
+                    embeddings = await worker.process_batch(texts)
+
+                    # Attach embeddings to chunks
+                    for chunk, embedding in zip(chunk_batch, embeddings, strict=False):
+                        chunk.embedding = embedding
+
+                    # Queue batch for storage
+                    await storage_queue.put((batch_id, chunk_batch))
+
+                    nonlocal embeddings_completed
+                    embeddings_completed += len(chunk_batch)
+
+                    logger.debug(
+                        f"Embedding batch {batch_id} completed: {len(chunk_batch)} chunks"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error in embedding worker {batch_id}: {e}")
+                    # Still queue for storage with empty embeddings to maintain progress
+                    await storage_queue.put((batch_id, chunk_batch))
+
+        async def storage_worker():
+            """Worker to store embedded chunks as they become available."""
+            processed_batches = 0
+            while processed_batches < len(chunk_batches):
+                try:
+                    async with storage_semaphore:
+                        batch_id, chunk_batch = await storage_queue.get()
+
+                        # Filter chunks with valid embeddings
+                        valid_chunks = [
+                            chunk
+                            for chunk in chunk_batch
+                            if chunk.embedding is not None and len(chunk.embedding) > 0
+                        ]
+
+                        if valid_chunks:
+                            # Store chunks in Qdrant concurrently
+                            await self.vector_service.upsert_documents(valid_chunks)
+
+                        nonlocal storage_completed
+                        storage_completed += len(chunk_batch)
+                        processed_batches += 1
+
+                        # Update progress
+                        if progress_callback:
+                            progress = base_progress + int(
+                                (storage_completed / total_chunks) * 10
+                            )  # 10 units for embeddings
+                            progress_callback(
+                                progress,
+                                base_progress + 10,
+                                f"Processed {storage_completed}/{total_chunks} chunks",
+                            )
+
+                        logger.debug(
+                            f"Storage batch {batch_id} completed: {len(valid_chunks)} chunks stored"
+                        )
+
+                        storage_queue.task_done()
+
+                except Exception as e:
+                    logger.error(f"Error in storage worker: {e}")
+                    storage_queue.task_done()
+                    processed_batches += 1
+
+        # Create all embedding worker tasks at once for true parallelism
+        embedding_tasks = [
+            embedding_worker(batch_id, chunk_batch)
+            for batch_id, chunk_batch in enumerate(chunk_batches)
+        ]
+
+        # Start storage worker
+        storage_task = storage_worker()
+
+        # Execute all tasks truly in parallel
+        await asyncio.gather(*embedding_tasks, storage_task, return_exceptions=True)
+
+        logger.info(
+            f"Parallel pipeline completed: {embeddings_completed} embeddings generated, "
+            f"{storage_completed} chunks processed"
+        )
+
+        return embeddings_completed
+
+    def optimize_batch_size(self, total_items: int) -> int:
+        """
+        Optimize batch size based on total items and available workers.
+
+        Args:
+            total_items: Total number of items to process
+
+        Returns:
+            Optimized batch size
+        """
+        if total_items <= self.batch_size:
+            return total_items
+
+        # Calculate optimal batch size to distribute work evenly
+        optimal_batches = min(total_items // self.max_workers, self.batch_size)
+        return max(optimal_batches, 1)
+
+    async def health_check(self) -> dict[str, Any]:
+        """
+        Check health of the embedding pipeline.
+
+        Returns:
+            Health status dictionary
+        """
+        health_status = {
+            "pipeline_running": self._pipeline_running,
+            "workers_count": len(self.workers),
+            "max_workers": self.max_workers,
+            "batch_size": self.batch_size,
+            "cache_stats": self.cache.get_cache_statistics(),
+        }
+
+        # Check worker health
+        if self.workers:
+            worker_stats = [worker.get_statistics() for worker in self.workers]
+            health_status["worker_stats"] = worker_stats
+
+            # Calculate aggregate statistics
+            total_processed = sum(stats["processed_count"] for stats in worker_stats)
+            total_errors = sum(stats["error_count"] for stats in worker_stats)
+
+            health_status["aggregate_stats"] = {
+                "total_processed": total_processed,
+                "total_errors": total_errors,
+                "overall_success_rate": (
+                    (total_processed - total_errors) / total_processed
+                    if total_processed > 0
+                    else 1.0
+                ),
+            }
+
+        # Check embedding service health
+        if self.embedding_service:
+            embedding_health = await self.embedding_service.health_check()
+            health_status["embedding_service"] = (
+                "healthy" if embedding_health else "unhealthy"
+            )
+
+        return health_status

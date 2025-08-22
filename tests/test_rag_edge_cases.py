@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from crawler_mcp.core.rag import RagService
+from crawler_mcp.core.rag import RagService, TokenBasedChunker
 from crawler_mcp.models.crawl import CrawlResult, CrawlStatus, PageContent
 from crawler_mcp.models.rag import DocumentChunk, SearchMatch
 
@@ -235,37 +235,46 @@ class TestRagChunkingFallbacks:
         """Test token-based chunking falls back to word approximation."""
         text = "This is a test sentence. " * 200  # 1000 words, > 731 word threshold
 
-        chunks = rag_service_no_tokenizer._chunk_text_token_based(text=text)
+        # Use the new chunking module directly with smaller chunk size to ensure multiple chunks
+        chunker = TokenBasedChunker(
+            chunk_size=500, overlap=rag_service_no_tokenizer.chunk_overlap
+        )
+        chunks = chunker.chunk_text(text)
 
         # Should create multiple chunks using word approximation
         assert len(chunks) > 1
         assert isinstance(chunks, list)
 
-        # Verify chunk structure includes token estimates
+        # Verify chunk structure includes token counts
         for chunk in chunks:
             assert isinstance(chunk, dict)
             assert "text" in chunk
             assert "chunk_index" in chunk
             assert "word_count" in chunk
-            assert "token_count_estimate" in chunk
-            assert "start_word" in chunk
-            assert "end_word" in chunk
+            assert "token_count" in chunk
+            assert "start_token" in chunk
+            assert "end_token" in chunk
 
     @pytest.mark.asyncio
     async def test_token_chunking_edge_cases(self, rag_service_no_tokenizer):
         """Test token chunking fallback with edge cases."""
+        chunker = TokenBasedChunker(
+            chunk_size=rag_service_no_tokenizer.chunk_size,
+            overlap=rag_service_no_tokenizer.chunk_overlap,
+        )
+
         # Test empty text
-        chunks = rag_service_no_tokenizer._chunk_text_token_based(text="")
+        chunks = chunker.chunk_text("")
         assert chunks == []
 
         # Test single word
-        chunks = rag_service_no_tokenizer._chunk_text_token_based(text="word")
+        chunks = chunker.chunk_text("word")
         assert len(chunks) == 1
         assert chunks[0]["word_count"] == 1
 
         # Test text smaller than chunk size
         small_text = "just a few words here"
-        chunks = rag_service_no_tokenizer._chunk_text_token_based(text=small_text)
+        chunks = chunker.chunk_text(small_text)
         assert len(chunks) == 1
 
     @pytest.mark.asyncio
@@ -275,7 +284,10 @@ class TestRagChunkingFallbacks:
         # Need at least 2 * chunk_size_words to ensure overlap
         text = " ".join([f"word{i}" for i in range(1600)])  # 1600 words > 2 * 731
 
-        chunks = rag_service_no_tokenizer._chunk_text_token_based(text=text)
+        chunker = TokenBasedChunker(
+            chunk_size=500, overlap=rag_service_no_tokenizer.chunk_overlap
+        )
+        chunks = chunker.chunk_text(text)
 
         assert len(chunks) > 1
 
@@ -284,9 +296,9 @@ class TestRagChunkingFallbacks:
             current_chunk = chunks[i]
             next_chunk = chunks[i + 1]
 
-            # Check word positions
-            current_end = current_chunk["end_word"]
-            next_start = next_chunk["start_word"]
+            # Check token positions
+            current_end = current_chunk["end_token"]
+            next_start = next_chunk["start_token"]
 
             # The implementation creates adjacent chunks (no gaps, but also no overlap)
             # when the calculated overlap would cause the next chunk to start before current end
@@ -684,7 +696,7 @@ class TestRagOrphanedChunks:
         ]
 
         # Process crawl result (should detect and delete orphans)
-        result = await service.process_crawl_result(
+        await service.process_crawl_result(
             crawl_result, progress_callback=progress_callback
         )
 

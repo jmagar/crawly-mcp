@@ -16,8 +16,10 @@ import pytest
 from fastmcp import Client
 
 from crawler_mcp.core.rag import (
+    FixedSizeChunker,
     QueryCache,
     RagService,
+    TokenBasedChunker,
     find_line_boundary,
     find_paragraph_boundary,
     find_sentence_boundary,
@@ -455,8 +457,9 @@ class TestRagServiceCoreWorkflows:
         """Test character-based text chunking."""
         long_text = "This is a long text. " * 100  # 2100 characters
 
-        # Use the actual API - only text parameter, uses self.chunk_size and self.chunk_overlap
-        chunks = rag_service._chunk_text_character_based(text=long_text)
+        # Use the new chunking module directly with smaller chunk size to ensure multiple chunks
+        chunker = FixedSizeChunker(chunk_size=500, overlap=rag_service.chunk_overlap)
+        chunks = chunker.chunk_text(long_text)
 
         assert len(chunks) > 1  # Should create multiple chunks
         assert isinstance(chunks, list)
@@ -481,8 +484,9 @@ class TestRagServiceCoreWorkflows:
         # Each sentence is ~5 tokens, so 250 sentences = ~1250 tokens > 1024 chunk_size
         long_text = "This is a test sentence. " * 250  # ~1250 tokens
 
-        # Use the actual API - only text parameter, uses self.chunk_size and self.chunk_overlap
-        chunks = rag_service._chunk_text_token_based(text=long_text)
+        # Use the new chunking module directly with smaller chunk size to ensure multiple chunks
+        chunker = TokenBasedChunker(chunk_size=500, overlap=rag_service.chunk_overlap)
+        chunks = chunker.chunk_text(long_text)
 
         assert len(chunks) > 1  # Should create multiple chunks
         assert isinstance(chunks, list)
@@ -627,7 +631,7 @@ class TestRagServiceMCPIntegration:
     async def test_rag_query_tool(self, test_server):
         """Test rag_query MCP tool."""
         # First add some content using scrape tool
-        scrape_result = await test_server.call_tool(
+        await test_server.call_tool(
             "scrape", {"url": "https://example.com", "process_with_rag": True}
         )
 

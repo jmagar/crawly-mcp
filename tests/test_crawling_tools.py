@@ -5,7 +5,8 @@ Test crawling tools with in-memory FastMCP client.
 from pathlib import Path
 
 import pytest
-from fastmcp import Client, ToolError
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 
 class TestCrawlingTools:
@@ -146,7 +147,6 @@ class TestCrawlingTools:
 
     @pytest.mark.slow
     @pytest.mark.integration
-    @pytest.mark.flaky(reruns=2)
     async def test_crawl_small_website(self, mcp_client: Client):
         """Test crawling a small website (marked as slow)."""
         # Use a simple, reliable test site

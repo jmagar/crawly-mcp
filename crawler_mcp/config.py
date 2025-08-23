@@ -53,12 +53,12 @@ class CrawlerrSettings(BaseSettings):
         default=1024, alias="QDRANT_PREFETCH_SIZE", ge=256, le=2048
     )
     qdrant_search_exact: bool = Field(default=False, alias="QDRANT_SEARCH_EXACT")
-    
+
     # Vector Service Configuration
     use_modular_vectors: bool = Field(
-        default=False, 
+        default=False,
         alias="USE_MODULAR_VECTORS",
-        description="Enable modular vector service implementation for improved maintainability"
+        description="Enable modular vector service implementation for improved maintainability",
     )
 
     # HF Text Embeddings Inference (TEI)

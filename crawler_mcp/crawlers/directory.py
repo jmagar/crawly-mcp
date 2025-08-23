@@ -10,6 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..config import settings
 from ..models.crawl import (
     CrawlResult,
     CrawlStatistics,
@@ -254,9 +255,9 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
 
             # Skip files with excluded extensions (configurable)
             # Convert to set for O(1) lookup
-            excluded_extensions = set(
+            excluded_extensions = {
                 ext.lower() for ext in settings.directory_excluded_extensions
-            )
+            }
 
             if file_path.suffix.lower() in excluded_extensions:
                 return False
@@ -435,17 +436,18 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                         completed_count += 1
 
                         # Check memory pressure every 16 files or at end of batch
-                        if completed_count % 16 == 0 or completed_count == len(futures):
-                            if (
-                                self.memory_manager
-                                and await self.memory_manager.check_memory_pressure()
-                            ):
-                                self.logger.warning(
-                                    f"Memory pressure detected during batch processing "
-                                    f"({completed_count}/{len(futures)} files completed). "
-                                    "Applying backpressure..."
-                                )
-                                await self._wait_for_memory_relief()
+                        if (
+                            completed_count % 16 == 0 or completed_count == len(futures)
+                        ) and (
+                            self.memory_manager
+                            and await self.memory_manager.check_memory_pressure()
+                        ):
+                            self.logger.warning(
+                                f"Memory pressure detected during batch processing "
+                                f"({completed_count}/{len(futures)} files completed). "
+                                "Applying backpressure..."
+                            )
+                            await self._wait_for_memory_relief()
                     except Exception as e:
                         batch_results.append(e)
                         completed_count += 1
@@ -455,7 +457,7 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
             # Filter and return results
             processed_results: list[PageContent | Exception] = []
             for result in results:
-                if isinstance(result, (PageContent, Exception)):
+                if isinstance(result, PageContent | Exception):
                     processed_results.append(result)
                 else:
                     # Handle any unexpected return types

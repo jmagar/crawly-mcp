@@ -40,7 +40,7 @@ class BaseVectorService:
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the base vector service.
-        
+
         Args:
             client: Optional shared Qdrant client instance
         """
@@ -52,7 +52,7 @@ class BaseVectorService:
                 api_key=settings.qdrant_api_key,
                 timeout=int(settings.qdrant_timeout),
             )
-        
+
         self.collection_name = settings.qdrant_collection
         self.vector_size = settings.qdrant_vector_size
 
@@ -78,10 +78,10 @@ class BaseVectorService:
     async def _handle_client_error(self, e: Exception) -> bool:
         """
         Handle client connection errors with automatic recreation.
-        
+
         Args:
             e: The exception that occurred
-            
+
         Returns:
             True if client was recreated, False if error should be re-raised
         """

@@ -26,7 +26,7 @@ class CollectionManager(BaseVectorService):
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the collection manager.
-        
+
         Args:
             client: Optional shared Qdrant client instance
         """
@@ -35,7 +35,7 @@ class CollectionManager(BaseVectorService):
     async def health_check(self) -> bool:
         """
         Check if Qdrant service is healthy and responsive.
-        
+
         Returns:
             True if service is healthy, False otherwise
         """
@@ -116,13 +116,13 @@ class CollectionManager(BaseVectorService):
     async def get_collection_info(self) -> dict[str, Any]:
         """
         Get information about the collection.
-        
+
         Returns:
             Dictionary with collection information
         """
         try:
             info = await self.client.get_collection(self.collection_name)
-            
+
             # Handle vector config which might be dict or VectorParams
             vectors_config = info.config.params.vectors
             if isinstance(vectors_config, dict):
@@ -156,7 +156,7 @@ class CollectionManager(BaseVectorService):
     async def delete_collection(self) -> bool:
         """
         Delete the collection.
-        
+
         Returns:
             True if collection was deleted successfully
         """

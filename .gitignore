@@ -45,6 +45,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Tests directory
+tests/
+
 # Virtual environments
 .env
 .venv

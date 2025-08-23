@@ -16,9 +16,9 @@ from qdrant_client.models import (
     SearchParams,
 )
 
-from .base import BaseVectorService, _parse_timestamp
 from ...config import settings
 from ...models.rag import DocumentChunk, SearchMatch
+from .base import BaseVectorService, _parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class SearchEngine(BaseVectorService):
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the search engine.
-        
+
         Args:
             client: Optional shared Qdrant client instance
         """
@@ -60,6 +60,7 @@ class SearchEngine(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -119,9 +120,7 @@ class SearchEngine(BaseVectorService):
             if "start" in date_range:
                 start_timestamp = _parse_timestamp(date_range["start"]).isoformat()
                 filter_conditions.append(
-                    FieldCondition(
-                        key="timestamp", range=Range(gte=start_timestamp)
-                    )
+                    FieldCondition(key="timestamp", range=Range(gte=start_timestamp))
                 )
 
             if "end" in date_range:
@@ -222,10 +221,7 @@ class SearchEngine(BaseVectorService):
         return matches
 
     async def search_with_reranking(
-        self,
-        query_vector: list[float],
-        rerank_threshold: float = 0.8,
-        **kwargs
+        self, query_vector: list[float], rerank_threshold: float = 0.8, **kwargs
     ) -> list[SearchMatch]:
         """
         Perform search with optional result reranking.

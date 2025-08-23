@@ -14,8 +14,8 @@ from qdrant_client.models import (
     UpdateStatus,
 )
 
-from .base import BaseVectorService, _parse_timestamp
 from ...models.rag import DocumentChunk
+from .base import BaseVectorService, _parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class DocumentOperations(BaseVectorService):
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the document operations manager.
-        
+
         Args:
             client: Optional shared Qdrant client instance
         """
@@ -52,6 +52,7 @@ class DocumentOperations(BaseVectorService):
 
         # Ensure collection exists (delegate to collections module)
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -134,6 +135,7 @@ class DocumentOperations(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -194,6 +196,7 @@ class DocumentOperations(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -235,6 +238,7 @@ class DocumentOperations(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -288,6 +292,7 @@ class DocumentOperations(BaseVectorService):
 
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 

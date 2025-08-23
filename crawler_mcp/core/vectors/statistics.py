@@ -21,7 +21,7 @@ class StatisticsCollector(BaseVectorService):
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the statistics collector.
-        
+
         Args:
             client: Optional shared Qdrant client instance
         """
@@ -36,6 +36,7 @@ class StatisticsCollector(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -121,6 +122,7 @@ class StatisticsCollector(BaseVectorService):
         """
         # Ensure collection exists
         from .collections import CollectionManager
+
         collection_manager = CollectionManager(self.client)
         await collection_manager.ensure_collection_exists()
 
@@ -290,37 +292,42 @@ class StatisticsCollector(BaseVectorService):
         """
         try:
             from .collections import CollectionManager
+
             collection_manager = CollectionManager(self.client)
-            
+
             # Get collection info
             collection_info = await collection_manager.get_collection_info()
-            
+
             # Calculate health metrics
             health_score = 100.0
             issues = []
-            
+
             # Check if collection has data
             if collection_info.get("points_count", 0) == 0:
                 health_score -= 30
                 issues.append("No data points in collection")
-            
+
             # Check indexing status
             vectors_count = collection_info.get("vectors_count", 0)
             indexed_count = collection_info.get("indexed_vectors_count", 0)
-            
+
             if vectors_count > 0:
                 indexing_ratio = indexed_count / vectors_count
                 if indexing_ratio < 0.9:
                     health_score -= 20
                     issues.append(f"Low indexing ratio: {indexing_ratio:.1%}")
-            
+
             return {
                 "health_score": health_score,
-                "status": "healthy" if health_score >= 80 else "degraded" if health_score >= 60 else "unhealthy",
+                "status": "healthy"
+                if health_score >= 80
+                else "degraded"
+                if health_score >= 60
+                else "unhealthy",
                 "issues": issues,
                 "collection_info": collection_info,
             }
-            
+
         except Exception as e:
             logger.error(f"Error getting collection health: {e}")
             return {
@@ -340,18 +347,19 @@ class StatisticsCollector(BaseVectorService):
         try:
             # Get basic stats
             stats = await self.get_sources_stats()
-            
+
             # Additional analysis could be added here
             # For now, return basic distribution info
             return {
                 "total_sources": stats.get("unique_sources", 0),
                 "total_documents": stats.get("total_documents", 0),
                 "average_docs_per_source": (
-                    stats.get("total_documents", 0) / max(1, stats.get("unique_sources", 1))
+                    stats.get("total_documents", 0)
+                    / max(1, stats.get("unique_sources", 1))
                 ),
                 "average_chunk_size": stats.get("average_chunk_size", 0.0),
             }
-            
+
         except Exception as e:
             logger.error(f"Error analyzing content distribution: {e}")
             return {}
@@ -371,5 +379,5 @@ class StatisticsCollector(BaseVectorService):
         logger.info("Embedding quality metrics not yet implemented")
         return {
             "status": "not_implemented",
-            "message": "Embedding quality analysis is planned for future release"
+            "message": "Embedding quality analysis is planned for future release",
         }

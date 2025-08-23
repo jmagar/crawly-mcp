@@ -1050,7 +1050,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             # Fallback to sequential crawling
             for url in urls_to_crawl:
                 try:
-                    result = await crawler.arun(url=url, config=run_config)
+                    result = await browser.arun(url=url, config=run_config)
                     successful_results.append(result)
                 except Exception as e:
                     error_msg = f"Error crawling {url}: {e}"

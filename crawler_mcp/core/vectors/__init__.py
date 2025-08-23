@@ -9,15 +9,12 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from qdrant_client import AsyncQdrantClient
-
+from ...models.rag import DocumentChunk, SearchMatch
 from .base import BaseVectorService
 from .collections import CollectionManager
 from .operations import DocumentOperations
 from .search import SearchEngine
 from .statistics import StatisticsCollector
-from ...config import settings
-from ...models.rag import DocumentChunk, SearchMatch
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +22,7 @@ logger = logging.getLogger(__name__)
 class VectorService(BaseVectorService):
     """
     Unified vector service using modular components.
-    
+
     Provides the same interface as the original VectorService while
     delegating operations to specialized modules for better organization.
     """
@@ -33,7 +30,7 @@ class VectorService(BaseVectorService):
     def __init__(self) -> None:
         """Initialize the modular vector service."""
         super().__init__()
-        
+
         # Initialize all modules with shared client
         self.collections = CollectionManager(self.client)
         self.operations = DocumentOperations(self.client)
@@ -120,7 +117,7 @@ class VectorService(BaseVectorService):
         )
 
     # Additional methods for accessing modules directly
-    
+
     def get_collections_manager(self) -> CollectionManager:
         """Get the collections manager for advanced collection operations."""
         return self.collections
@@ -141,7 +138,7 @@ class VectorService(BaseVectorService):
     async def _recreate_client(self) -> None:
         """Recreate the Qdrant client and update all modules."""
         await super()._recreate_client()
-        
+
         # Update client reference in all modules
         self.collections.client = self.client
         self.operations.client = self.client
@@ -151,12 +148,12 @@ class VectorService(BaseVectorService):
 
 # Export all classes for direct use
 __all__ = [
-    "VectorService",
-    "CollectionManager", 
+    "BaseVectorService",
+    "CollectionManager",
     "DocumentOperations",
     "SearchEngine",
     "StatisticsCollector",
-    "BaseVectorService",
+    "VectorService",
 ]
 
 
@@ -164,7 +161,7 @@ __all__ = [
 def create_vector_service() -> VectorService:
     """
     Create a new VectorService instance.
-    
+
     Returns:
         Configured VectorService instance
     """

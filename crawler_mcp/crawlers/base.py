@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-"""
-Base crawling strategy with common functionality.
-"""
-
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -12,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..core.memory import MemoryManager
 from ..models.crawl import CrawlResult
+
+"""Base crawling strategy with common functionality."""
 
 logger = logging.getLogger(__name__)
 

@@ -44,8 +44,21 @@ class CollectionManager(BaseVectorService):
             collections = await self.client.get_collections()
             return collections is not None
         except Exception as e:
-            logger.error(f"Qdrant health check failed: {e}")
-            return False
+            # Handle client errors with retry pattern consistent with other methods
+            if await self._handle_client_error(e):
+                try:
+                    # Retry after client recreation
+                    collections = await self.client.get_collections()
+                    return collections is not None
+                except Exception as retry_error:
+                    logger.error(
+                        f"Qdrant health check failed after retry: {retry_error}"
+                    )
+                    return False
+            else:
+                # Re-raise unexpected exceptions that aren't client errors
+                logger.error(f"Qdrant health check failed with unexpected error: {e}")
+                raise
 
     async def ensure_collection_exists(self) -> bool:
         """
@@ -74,7 +87,16 @@ class CollectionManager(BaseVectorService):
             logger.info(
                 f"Creating collection '{self.collection_name}' with optimized HNSW config"
             )
-            await self._create_collection_with_config()
+            try:
+                await self._create_collection_with_config()
+            except Exception as e:
+                # Handle concurrent creation race condition
+                if "already exists" in str(e).lower():
+                    logger.info(
+                        f"Collection '{self.collection_name}' already exists (concurrent creation)"
+                    )
+                    return True
+                raise
 
             logger.info(f"Collection '{self.collection_name}' created successfully")
             return True

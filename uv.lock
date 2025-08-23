@@ -548,8 +548,11 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "qdrant-client" },
     { name = "rich" },
+    { name = "sentence-transformers" },
     { name = "structlog" },
     { name = "tiktoken" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 
 [package.optional-dependencies]
@@ -559,11 +562,6 @@ dev = [
     { name = "pre-commit" },
     { name = "ruff" },
     { name = "types-psutil" },
-]
-ml = [
-    { name = "sentence-transformers" },
-    { name = "torch" },
-    { name = "transformers" },
 ]
 test = [
     { name = "httpx" },
@@ -600,14 +598,14 @@ requires-dist = [
     { name = "qdrant-client", specifier = ">=1.15.1" },
     { name = "rich", specifier = ">=13.7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.0" },
-    { name = "sentence-transformers", marker = "extra == 'ml'", specifier = ">=5.1.0" },
+    { name = "sentence-transformers", specifier = ">=5.1.0" },
     { name = "structlog", specifier = ">=23.2.0" },
     { name = "tiktoken", specifier = ">=0.9.0" },
-    { name = "torch", marker = "extra == 'ml'", specifier = ">=2.8.0" },
-    { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.55.0" },
+    { name = "torch", specifier = ">=2.8.0" },
+    { name = "transformers", specifier = ">=4.55.0" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=7.0.0.20250801" },
 ]
-provides-extras = ["ml", "dev", "test"]
+provides-extras = ["dev", "test"]
 
 [[package]]
 name = "cryptography"

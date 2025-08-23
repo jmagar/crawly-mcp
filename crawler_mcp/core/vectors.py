@@ -343,16 +343,17 @@ class VectorService:
             if date_range:
                 from qdrant_client.models import Range
 
-                if "start" in date_range:
-                    start_timestamp = _parse_timestamp(date_range["start"]).isoformat()
+                start, end = date_range
+                if start is not None:
+                    start_timestamp = _parse_timestamp(start).isoformat()
                     filter_conditions.append(
                         FieldCondition(
                             key="timestamp", range=Range(gte=start_timestamp)
                         )
                     )
 
-                if "end" in date_range:
-                    end_timestamp = _parse_timestamp(date_range["end"]).isoformat()
+                if end is not None:
+                    end_timestamp = _parse_timestamp(end).isoformat()
                     filter_conditions.append(
                         FieldCondition(key="timestamp", range=Range(lte=end_timestamp))
                     )

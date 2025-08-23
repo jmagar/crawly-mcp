@@ -3,7 +3,7 @@ Base class for vector service modules providing shared functionality.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from dateutil import parser as date_parser
@@ -17,18 +17,28 @@ logger = logging.getLogger(__name__)
 
 def _parse_timestamp(timestamp_value: Any) -> datetime:
     """
-    Parse timestamp from various formats to datetime.
+    Parse timestamp from various formats to timezone-aware datetime in UTC.
     Handles ISO strings, datetime objects, and empty values.
+    All returned datetimes are guaranteed to be timezone-aware in UTC.
     """
     if isinstance(timestamp_value, datetime):
+        # If datetime has no timezone, attach UTC; otherwise leave as-is
+        if timestamp_value.tzinfo is None:
+            return timestamp_value.replace(tzinfo=UTC)
         return timestamp_value
+
     if isinstance(timestamp_value, str) and timestamp_value:
         try:
-            return date_parser.parse(timestamp_value)
+            parsed_dt = date_parser.parse(timestamp_value)
+            # If parsed datetime has no timezone, set it to UTC
+            if parsed_dt.tzinfo is None:
+                return parsed_dt.replace(tzinfo=UTC)
+            return parsed_dt
         except (ValueError, TypeError):
             logger.warning(f"Failed to parse timestamp: {timestamp_value}")
-    # Default to current time for invalid/empty timestamps
-    return datetime.utcnow()
+
+    # Default to current time in UTC for invalid/empty timestamps
+    return datetime.now(UTC)
 
 
 class BaseVectorService:
@@ -50,7 +60,7 @@ class BaseVectorService:
             self.client = AsyncQdrantClient(
                 url=settings.qdrant_url,
                 api_key=settings.qdrant_api_key,
-                timeout=int(settings.qdrant_timeout),
+                timeout=float(settings.qdrant_timeout),
             )
 
         self.collection_name = settings.qdrant_collection
@@ -72,7 +82,7 @@ class BaseVectorService:
         self.client = AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
-            timeout=int(settings.qdrant_timeout),
+            timeout=float(settings.qdrant_timeout),
         )
 
     async def _handle_client_error(self, e: Exception) -> bool:

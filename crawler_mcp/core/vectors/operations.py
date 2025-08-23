@@ -77,6 +77,14 @@ class DocumentOperations(BaseVectorService):
                         logger.warning(f"Skipping document {doc.id} - no embedding")
                         continue
 
+                    # Validate embedding dimensionality
+                    if len(doc.embedding) != self.vector_size:
+                        logger.warning(
+                            f"Skipping document {doc.id} - embedding dimension mismatch: "
+                            f"got {len(doc.embedding)}, expected {self.vector_size}"
+                        )
+                        continue
+
                     # Prepare point data
                     point = PointStruct(
                         id=doc.id,

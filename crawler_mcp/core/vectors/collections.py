@@ -40,8 +40,11 @@ class CollectionManager(BaseVectorService):
             True if service is healthy, False otherwise
         """
         try:
+            # Get client from pool or use existing
+            client = await self._get_client()
+
             # Try to get collections as health check
-            collections = await self.client.get_collections()
+            collections = await client.get_collections()
             return collections is not None
         except Exception as e:
             # Handle client errors with retry pattern consistent with other methods

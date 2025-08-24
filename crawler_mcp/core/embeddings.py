@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 
 from ..config import settings
 from ..models.rag import EmbeddingResult
+from .resilience import exponential_backoff, tei_circuit
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ class EmbeddingService:
             logger.error(f"Error getting model info: {e}")
             return {}
 
+    @exponential_backoff(exceptions=(httpx.TimeoutException, httpx.RequestError))
     async def generate_embedding(
         self, text: str, normalize: bool | None = None, truncate: bool = True
     ) -> EmbeddingResult:
@@ -257,7 +259,8 @@ class EmbeddingService:
         batch_size: int | None = None,
     ) -> list[EmbeddingResult]:
         """
-        Generate embeddings for multiple texts in batches.
+        Generate embeddings for multiple texts using TRUE BATCH API.
+        This method now delegates to generate_embeddings_true_batch for optimal performance.
 
         Args:
             texts: List of texts to embed
@@ -274,86 +277,18 @@ class EmbeddingService:
         if batch_size is None:
             batch_size = settings.tei_batch_size
 
-        # Filter out empty texts
-        valid_texts = [
-            (i, text.strip()) for i, text in enumerate(texts) if text.strip()
-        ]
-        if not valid_texts:
-            return []
-
+        # For optimal performance, use true batch API
+        # Split into chunks if needed based on batch_size
         results = []
-        total_batches = (len(valid_texts) + batch_size - 1) // batch_size
-
-        logger.info(f"Processing {len(valid_texts)} texts in {total_batches} batches")
-
-        # Start timing the entire batch process with high-resolution timer
-        batch_start_time = time.perf_counter()
-
-        for batch_idx in range(total_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, len(valid_texts))
-            batch = valid_texts[start_idx:end_idx]
-
-            logger.debug(
-                f"Processing batch {batch_idx + 1}/{total_batches} ({len(batch)} texts)"
+        
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            batch_results = await self.generate_embeddings_true_batch(
+                batch, normalize=normalize, truncate=truncate
             )
-
-            # Process batch concurrently
-            batch_tasks = [
-                self.generate_embedding(text, normalize=normalize, truncate=truncate)
-                for _, text in batch
-            ]
-
-            try:
-                batch_results = await asyncio.gather(
-                    *batch_tasks, return_exceptions=True
-                )
-
-                # Handle results and exceptions
-                for (original_idx, _), result in zip(
-                    batch, batch_results, strict=False
-                ):
-                    if isinstance(result, Exception):
-                        logger.error(f"Failed to embed text {original_idx}: {result}")
-                        # Create error result
-                        error_result = EmbeddingResult(
-                            text=texts[original_idx][:100] + "..."
-                            if len(texts[original_idx]) > 100
-                            else texts[original_idx],
-                            embedding=[0.0]
-                            * settings.embedding_dimension,  # Zero embedding for failed texts
-                            model=self.model_name,
-                            dimensions=settings.embedding_dimension,
-                            processing_time=0.0,
-                        )
-                        results.append((original_idx, error_result))
-                    else:
-                        # Type assertion: result is EmbeddingResult if not Exception
-                        assert isinstance(result, EmbeddingResult)
-                        results.append((original_idx, result))
-
-            except Exception as e:
-                logger.error(f"Batch processing failed: {e}")
-                raise ToolError(f"Batch embedding generation failed: {e!s}") from e
-
-        # Log total batch processing time with high-resolution timer
-        batch_end_time = time.perf_counter()
-        elapsed_time = batch_end_time - batch_start_time
-
-        # Guard against division by zero for very small/instantaneous batches
-        if elapsed_time > 0:
-            throughput = len(valid_texts) / elapsed_time
-            logger.info(
-                f"Completed embedding generation for {len(valid_texts)} texts in {elapsed_time:.2f}s - {throughput:.1f} embeddings/sec"
-            )
-        else:
-            logger.info(
-                f"Completed embedding generation for {len(valid_texts)} texts instantaneously"
-            )
-
-        # Sort results by original index and return embedding results
-        results.sort(key=lambda x: x[0])
-        return [result for _, result in results]
+            results.extend(batch_results)
+        
+        return results
 
     async def compute_similarity(
         self, embedding1: list[float], embedding2: list[float]

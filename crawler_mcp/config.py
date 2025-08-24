@@ -46,6 +46,11 @@ class CrawlerrSettings(BaseSettings):
     qdrant_connection_pool_size: int = Field(
         default=16, alias="QDRANT_CONNECTION_POOL_SIZE", ge=1, le=32
     )
+    # Unified batch configuration for optimal performance
+    default_batch_size: int = Field(
+        default=256, alias="DEFAULT_BATCH_SIZE", ge=64, le=512,
+        description="Default batch size for all operations"
+    )
     qdrant_batch_size: int = Field(
         default=256, alias="QDRANT_BATCH_SIZE", ge=64, le=512
     )
@@ -54,12 +59,7 @@ class CrawlerrSettings(BaseSettings):
     )
     qdrant_search_exact: bool = Field(default=False, alias="QDRANT_SEARCH_EXACT")
 
-    # Vector Service Configuration
-    use_modular_vectors: bool = Field(
-        default=False,
-        alias="USE_MODULAR_VECTORS",
-        description="Enable modular vector service implementation for improved maintainability",
-    )
+    # Vector Service Configuration - using modular implementation
 
     # HF Text Embeddings Inference (TEI)
     tei_url: str = Field(default="http://localhost:8080", alias="TEI_URL")
@@ -68,14 +68,28 @@ class CrawlerrSettings(BaseSettings):
         default=128, alias="TEI_MAX_CONCURRENT_REQUESTS"
     )
     tei_max_batch_tokens: int = Field(default=32768, alias="TEI_MAX_BATCH_TOKENS")
-    tei_batch_size: int = Field(default=64, alias="TEI_BATCH_SIZE")
+    tei_batch_size: int = Field(default=256, alias="TEI_BATCH_SIZE")  # Increased for better throughput
     tei_timeout: float = Field(default=30.0, alias="TEI_TIMEOUT")
 
     # Embedding Configuration
     embedding_max_length: int = Field(default=32000, alias="EMBEDDING_MAX_LENGTH")
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
     embedding_normalize: bool = Field(default=True, alias="EMBEDDING_NORMALIZE")
-    embedding_max_retries: int = Field(default=2, alias="EMBEDDING_MAX_RETRIES")
+    embedding_max_retries: int = Field(default=3, alias="EMBEDDING_MAX_RETRIES")
+    
+    # Retry configuration with exponential backoff
+    retry_initial_delay: float = Field(
+        default=1.0, alias="RETRY_INITIAL_DELAY", ge=0.1, le=10.0,
+        description="Initial delay in seconds for exponential backoff"
+    )
+    retry_max_delay: float = Field(
+        default=60.0, alias="RETRY_MAX_DELAY", ge=1.0, le=300.0,
+        description="Maximum delay in seconds for exponential backoff"
+    )
+    retry_exponential_base: float = Field(
+        default=2.0, alias="RETRY_EXPONENTIAL_BASE", ge=1.1, le=5.0,
+        description="Base for exponential backoff calculation"
+    )
     embedding_workers: int = Field(default=4, alias="EMBEDDING_WORKERS", ge=1, le=16)
 
     # Chunking Configuration

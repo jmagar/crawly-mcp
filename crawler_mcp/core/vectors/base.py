@@ -11,6 +11,7 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance
 
 from ...config import settings
+from ..connection_pool import get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +55,14 @@ class BaseVectorService:
         Args:
             client: Optional shared Qdrant client instance
         """
+        self.pool = get_pool()
+        self._owned_client = client is None
+        
         if client is not None:
             self.client = client
         else:
-            self.client = AsyncQdrantClient(
-                url=settings.qdrant_url,
-                api_key=settings.qdrant_api_key,
-                timeout=float(settings.qdrant_timeout),
-            )
+            # Will get from pool when needed
+            self.client = None
 
         self.collection_name = settings.qdrant_collection
         self.vector_size = settings.qdrant_vector_size
@@ -76,14 +77,18 @@ class BaseVectorService:
             settings.qdrant_distance.lower(), Distance.COSINE
         )
 
+    async def _get_client(self) -> AsyncQdrantClient:
+        """Get a client from the pool or use existing."""
+        if self.client is not None:
+            return self.client
+        # Get from pool for operations
+        return await self.pool.get_client()
+    
     async def _recreate_client(self) -> None:
-        """Recreate the Qdrant client."""
-        logger.debug("Recreating Qdrant client...")
-        self.client = AsyncQdrantClient(
-            url=settings.qdrant_url,
-            api_key=settings.qdrant_api_key,
-            timeout=float(settings.qdrant_timeout),
-        )
+        """Recreate the Qdrant client (compatibility method)."""
+        logger.debug("Client recreation requested - using pool for new client")
+        # Pool handles recycling automatically
+        self.client = None
 
     async def _handle_client_error(self, e: Exception) -> bool:
         """
@@ -103,4 +108,10 @@ class BaseVectorService:
 
     async def close(self) -> None:
         """Close the Qdrant client."""
-        await self.client.close()
+        # Only close if we own the client and it's not from pool
+        if self.client and self._owned_client:
+            try:
+                await self.client.close()
+            except Exception:
+                pass  # Ignore close errors
+        self.client = None

@@ -16,7 +16,7 @@ from ...core.vectors import VectorService
 from ...models.crawl import CrawlResult, PageContent
 from ...models.rag import DocumentChunk
 from .chunking import AdaptiveChunker
-from .deduplication import DeduplicationManager
+from .deduplication import VectorDeduplicationManager
 from .embedding import EmbeddingPipeline
 
 logger = logging.getLogger(__name__)
@@ -292,7 +292,7 @@ class ProcessingPipeline:
         )
         self.embedding_pipeline = EmbeddingPipeline()
         self.deduplication_manager = (
-            DeduplicationManager()
+            VectorDeduplicationManager()
         )  # Uses default 0.95 threshold
         self.vector_service = None
         self._initialized = False
@@ -302,6 +302,8 @@ class ProcessingPipeline:
         if not self._initialized:
             self.vector_service = VectorService()
             await self.vector_service.__aenter__()
+            # Pass the vector service to the deduplication manager
+            self.deduplication_manager.vector_service = self.vector_service
             await self.embedding_pipeline.initialize()
             self._initialized = True
             logger.info("Processing pipeline initialized")

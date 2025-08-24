@@ -582,3 +582,115 @@ class DeduplicationManager(ABC):
 
         # If more than half are random UUIDs, use backwards compatibility
         return random_uuid_count > (sample_size // 2)
+
+
+class VectorDeduplicationManager(DeduplicationManager):
+    """
+    Concrete implementation of DeduplicationManager that integrates with VectorService
+    to perform deduplication operations against a vector database.
+    """
+
+    def __init__(self, vector_service=None, similarity_threshold: float = 0.95):
+        """
+        Initialize VectorDeduplicationManager.
+        
+        Args:
+            vector_service: VectorService instance for database operations
+            similarity_threshold: Threshold for similarity detection
+        """
+        super().__init__(similarity_threshold)
+        self.vector_service = vector_service
+
+    async def find_existing_chunks(self, source_url: str) -> list[dict[str, Any]]:
+        """
+        Find existing chunks for a source URL by querying the vector database.
+        
+        Args:
+            source_url: Source URL to search for
+            
+        Returns:
+            List of existing chunk dictionaries
+        """
+        if not self.vector_service:
+            return []
+            
+        try:
+            # Use the vector service to find chunks by source URL
+            results = await self.vector_service.operations.get_chunks_by_source(source_url)
+            
+            # Convert to the expected format
+            chunks = []
+            for result in results:
+                chunk_data = {
+                    "id": result.id,
+                    "content": result.payload.get("content", ""),
+                    "content_hash": result.payload.get("content_hash", ""),
+                    "source_url": result.payload.get("source_url", ""),
+                    "metadata": result.payload.get("metadata", {}),
+                }
+                chunks.append(chunk_data)
+                
+            logger.debug(f"Found {len(chunks)} existing chunks for {source_url}")
+            return chunks
+            
+        except Exception as e:
+            logger.warning(f"Error finding existing chunks for {source_url}: {e}")
+            return []
+
+    async def identify_orphaned_chunks(self, source_url: str) -> list[str]:
+        """
+        Identify orphaned chunks that no longer have corresponding content.
+        
+        For now, this is a simple implementation that could be enhanced with
+        more sophisticated logic to detect truly orphaned chunks.
+        
+        Args:
+            source_url: Source URL to check for orphaned chunks
+            
+        Returns:
+            List of orphaned chunk IDs
+        """
+        if not self.vector_service:
+            return []
+            
+        try:
+            # Find all chunks for this source
+            existing_chunks = await self.find_existing_chunks(source_url)
+            
+            # Simple heuristic: chunks are considered orphaned if they're very old
+            # In a more sophisticated implementation, we'd compare against current content
+            orphaned_ids = []
+            
+            # For now, return empty list (no orphaned chunks detected)
+            # This can be enhanced later with timestamp-based logic or content comparison
+            
+            logger.debug(f"Identified {len(orphaned_ids)} orphaned chunks for {source_url}")
+            return orphaned_ids
+            
+        except Exception as e:
+            logger.warning(f"Error identifying orphaned chunks for {source_url}: {e}")
+            return []
+
+    async def cleanup_orphaned_chunks(self, chunk_ids: list[str]) -> int:
+        """
+        Clean up orphaned chunks by deleting them from the vector database.
+        
+        Args:
+            chunk_ids: List of chunk IDs to delete
+            
+        Returns:
+            Number of chunks successfully deleted
+        """
+        if not self.vector_service or not chunk_ids:
+            return 0
+            
+        try:
+            # Use the vector service to delete chunks by IDs
+            deleted_count = await self.vector_service.operations.delete_chunks_by_ids(chunk_ids)
+            
+            logger.info(f"Successfully deleted {deleted_count} orphaned chunks")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned chunks: {e}")
+            return 0

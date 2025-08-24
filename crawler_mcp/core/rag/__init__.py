@@ -21,7 +21,7 @@ from .chunking import (
 )
 from .deduplication import (
     ContentHasher,
-    DeduplicationManager,
+    VectorDeduplicationManager,
     SimilarityDetector,
 )
 from .embedding import (
@@ -46,7 +46,7 @@ __all__ = [
     "AdaptiveChunker",
     "ChunkingStrategy",
     "ContentHasher",
-    "DeduplicationManager",
+    "VectorDeduplicationManager",
     "EmbeddingCache",
     "EmbeddingPipeline",
     "EmbeddingWorker",

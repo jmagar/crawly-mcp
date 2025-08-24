@@ -90,8 +90,9 @@ class EmbeddingCache:
 class EmbeddingWorker:
     """Individual embedding worker for parallel processing."""
 
-    def __init__(self, worker_id: int):
+    def __init__(self, worker_id: int, cache: EmbeddingCache | None = None):
         self.worker_id = worker_id
+        self.cache = cache
         self.embedding_service = None
         self.processed_count = 0
         self.error_count = 0
@@ -275,9 +276,10 @@ class EmbeddingPipeline:
             await self.initialize()
 
         if not self._pipeline_running:
-            # Create worker pool
+            # Create worker pool with shared cache
             self.workers = [
-                EmbeddingWorker(worker_id) for worker_id in range(self.max_workers)
+                EmbeddingWorker(worker_id, self.cache)
+                for worker_id in range(self.max_workers)
             ]
 
             # Initialize all workers
@@ -451,10 +453,13 @@ class EmbeddingPipeline:
             for i in range(0, len(document_chunks), embedding_batch_size)
         ]
 
+        # Create exactly one storage worker per chunk batch to ensure all items are processed
+        num_storage_workers = len(chunk_batches)
+
         logger.info(
             f"Starting parallel pipeline: {len(chunk_batches)} embedding batches, "
             f"{max_concurrent_embedding_batches} embedding workers, "
-            f"{max_concurrent_storage_ops} storage workers"
+            f"{num_storage_workers} storage workers"
         )
 
         # Progress tracking
@@ -493,12 +498,11 @@ class EmbeddingPipeline:
 
         async def storage_worker():
             """Worker to store embedded chunks as they become available."""
-            processed_batches = 0
-            while processed_batches < len(chunk_batches):
+            while True:
+                batch_id, chunk_batch = await storage_queue.get()
                 try:
+                    # Use semaphore only for the actual storage operation
                     async with storage_semaphore:
-                        batch_id, chunk_batch = await storage_queue.get()
-
                         # Filter chunks with valid embeddings
                         valid_chunks = [
                             chunk
@@ -510,31 +514,29 @@ class EmbeddingPipeline:
                             # Store chunks in Qdrant concurrently (only if persist=True)
                             await self.vector_service.upsert_documents(valid_chunks)
 
-                        nonlocal storage_completed
-                        storage_completed += len(chunk_batch)
-                        processed_batches += 1
+                    nonlocal storage_completed
+                    storage_completed += len(chunk_batch)
 
-                        # Update progress
-                        if progress_callback:
-                            progress = base_progress + int(
-                                (storage_completed / total_chunks) * 10
-                            )  # 10 units for embeddings
-                            progress_callback(
-                                progress,
-                                base_progress + 10,
-                                f"Processed {storage_completed}/{total_chunks} chunks",
-                            )
-
-                        logger.debug(
-                            f"Storage batch {batch_id} completed: {len(valid_chunks)} chunks stored"
+                    # Update progress
+                    if progress_callback:
+                        progress = base_progress + int(
+                            (storage_completed / total_chunks) * 10
+                        )  # 10 units for embeddings
+                        progress_callback(
+                            progress,
+                            base_progress + 10,
+                            f"Processed {storage_completed}/{total_chunks} chunks",
                         )
 
-                        storage_queue.task_done()
+                    logger.debug(
+                        f"Storage batch {batch_id} completed: {len(valid_chunks)} chunks stored"
+                    )
 
                 except Exception as e:
                     logger.error(f"Error in storage worker: {e}")
+                finally:
+                    # Always call task_done() to prevent queue.join() from hanging
                     storage_queue.task_done()
-                    processed_batches += 1
 
         # Create all embedding worker tasks at once for true parallelism
         embedding_tasks = [
@@ -542,12 +544,23 @@ class EmbeddingPipeline:
             for batch_id, chunk_batch in enumerate(chunk_batches)
         ]
 
-        # Start multiple storage workers equal to max_concurrent_storage_ops
-        num_storage_workers = min(max_concurrent_storage_ops, len(chunk_batches))
-        storage_tasks = [storage_worker() for _ in range(num_storage_workers)]
+        # Start storage workers in background
+        storage_tasks = [
+            asyncio.create_task(storage_worker()) for _ in range(num_storage_workers)
+        ]
 
-        # Execute all tasks truly in parallel
-        await asyncio.gather(*embedding_tasks, *storage_tasks, return_exceptions=True)
+        # Wait for all embedding tasks to complete
+        await asyncio.gather(*embedding_tasks, return_exceptions=True)
+
+        # Wait for all queued items to be processed
+        await storage_queue.join()
+
+        # Cancel storage workers (they're now idle)
+        for task in storage_tasks:
+            task.cancel()
+
+        # Wait for cancellation to complete
+        await asyncio.gather(*storage_tasks, return_exceptions=True)
 
         logger.info(
             f"Parallel pipeline completed: {embeddings_completed} embeddings generated, "

@@ -54,7 +54,8 @@ class StatisticsCollector(BaseVectorService):
             limit = 1000
 
             while True:
-                result = await self.client.scroll(
+                client = await self._get_client()
+                result = await client.scroll(
                     collection_name=self.collection_name,
                     limit=limit,
                     offset=offset,
@@ -136,7 +137,8 @@ class StatisticsCollector(BaseVectorService):
             scroll_limit = 1000
 
             while True:
-                result = await self.client.scroll(
+                client = await self._get_client()
+                result = await client.scroll(
                     collection_name=self.collection_name,
                     limit=scroll_limit,
                     offset=scroll_offset,

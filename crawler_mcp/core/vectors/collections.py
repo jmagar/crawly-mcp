@@ -51,7 +51,8 @@ class CollectionManager(BaseVectorService):
             if await self._handle_client_error(e):
                 try:
                     # Retry after client recreation
-                    collections = await self.client.get_collections()
+                    client = await self._get_client()
+                    collections = await client.get_collections()
                     return collections is not None
                 except Exception as retry_error:
                     logger.error(
@@ -73,10 +74,12 @@ class CollectionManager(BaseVectorService):
         try:
             # Check if collection exists with client recreation on error
             try:
-                collections = await self.client.get_collections()
+                client = await self._get_client()
+                collections = await client.get_collections()
             except Exception as e:
                 if await self._handle_client_error(e):
-                    collections = await self.client.get_collections()
+                    client = await self._get_client()
+                    collections = await client.get_collections()
                 else:
                     raise
 
@@ -131,10 +134,12 @@ class CollectionManager(BaseVectorService):
         }
 
         try:
-            await self.client.create_collection(**collection_config)
+            client = await self._get_client()
+            await client.create_collection(**collection_config)
         except Exception as e:
             if await self._handle_client_error(e):
-                await self.client.create_collection(**collection_config)
+                client = await self._get_client()
+                await client.create_collection(**collection_config)
             else:
                 raise
 
@@ -146,7 +151,8 @@ class CollectionManager(BaseVectorService):
             Dictionary with collection information
         """
         try:
-            info = await self.client.get_collection(self.collection_name)
+            client = await self._get_client()
+            info = await client.get_collection(self.collection_name)
 
             # Handle vector config which might be dict or VectorParams
             vectors_config = info.config.params.vectors
@@ -186,7 +192,8 @@ class CollectionManager(BaseVectorService):
             True if collection was deleted successfully
         """
         try:
-            await self.client.delete_collection(self.collection_name)
+            client = await self._get_client()
+            await client.delete_collection(self.collection_name)
             logger.info(f"Collection '{self.collection_name}' deleted successfully")
             return True
         except Exception as e:

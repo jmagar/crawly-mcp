@@ -105,12 +105,14 @@ class DocumentOperations(BaseVectorService):
                 if points:
                     # Upsert the batch with client recreation on error
                     try:
-                        result = await self.client.upsert(
+                        client = await self._get_client()
+                        result = await client.upsert(
                             collection_name=self.collection_name, points=points
                         )
                     except Exception as e:
                         if await self._handle_client_error(e):
-                            result = await self.client.upsert(
+                            client = await self._get_client()
+                            result = await client.upsert(
                                 collection_name=self.collection_name, points=points
                             )
                         else:
@@ -148,7 +150,8 @@ class DocumentOperations(BaseVectorService):
         await collection_manager.ensure_collection_exists()
 
         try:
-            result = await self.client.retrieve(
+            client = await self._get_client()
+            result = await client.retrieve(
                 collection_name=self.collection_name,
                 ids=[document_id],
                 with_payload=True,
@@ -210,7 +213,8 @@ class DocumentOperations(BaseVectorService):
 
         try:
             # Delete points with matching source_url
-            result = await self.client.delete(
+            client = await self._get_client()
+            result = await client.delete(
                 collection_name=self.collection_name,
                 points_selector=Filter(
                     must=[
@@ -252,7 +256,8 @@ class DocumentOperations(BaseVectorService):
 
         try:
             # Query all points with matching source_url
-            response = await self.client.scroll(
+            client = await self._get_client()
+            response = await client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=Filter(
                     must=[
@@ -306,7 +311,8 @@ class DocumentOperations(BaseVectorService):
 
         try:
             # Delete points by IDs
-            result = await self.client.delete(
+            client = await self._get_client()
+            result = await client.delete(
                 collection_name=self.collection_name,
                 points_selector=chunk_ids,  # Direct ID list
             )

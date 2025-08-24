@@ -72,7 +72,8 @@ class SearchEngine(BaseVectorService):
             search_params = await self._optimize_search_params(limit)
 
             # Perform search using modern query_points API
-            query_response = await self.client.query_points(
+            client = await self._get_client()
+            query_response = await client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector,
                 limit=limit,

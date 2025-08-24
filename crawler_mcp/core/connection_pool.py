@@ -5,12 +5,13 @@ Connection pooling for Qdrant client to improve performance.
 import asyncio
 import logging
 import random
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-from typing import Any, AsyncGenerator
+from datetime import datetime
+from typing import Any
 
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.exceptions import UnexpectedResponse
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from ..config import settings
 
@@ -51,12 +52,12 @@ class QdrantConnectionPool:
         self.connections: list[AsyncQdrantClient] = []
         self.available: asyncio.Queue[AsyncQdrantClient] = asyncio.Queue()
         self.connection_health: dict[AsyncQdrantClient, datetime] = {}
-        
+
         # Statistics
         self.total_requests = 0
         self.failed_requests = 0
         self.recycled_connections = 0
-        
+
         # Synchronization
         self._lock = asyncio.Lock()
         self._initialized = False
@@ -71,8 +72,10 @@ class QdrantConnectionPool:
             if self._initialized:
                 return
 
-            logger.info(f"Initializing Qdrant connection pool with {self.size} connections")
-            
+            logger.info(
+                f"Initializing Qdrant connection pool with {self.size} connections"
+            )
+
             # Create initial connections
             for i in range(self.size):
                 try:
@@ -84,15 +87,17 @@ class QdrantConnectionPool:
                 except Exception as e:
                     logger.error(f"Failed to create connection {i + 1}: {e}")
                     # Continue with fewer connections if some fail
-            
+
             if not self.connections:
                 raise RuntimeError("Failed to create any Qdrant connections")
-            
+
             # Start health check task
             self._health_check_task = asyncio.create_task(self._health_check_loop())
-            
+
             self._initialized = True
-            logger.info(f"Connection pool initialized with {len(self.connections)} connections")
+            logger.info(
+                f"Connection pool initialized with {len(self.connections)} connections"
+            )
 
     async def _create_client(self) -> AsyncQdrantClient:
         """Create a new Qdrant client."""
@@ -117,7 +122,7 @@ class QdrantConnectionPool:
         """Check health of all connections and recycle if needed."""
         now = datetime.utcnow()
         connections_to_check = []
-        
+
         # Get all available connections without blocking
         while not self.available.empty():
             try:
@@ -125,7 +130,7 @@ class QdrantConnectionPool:
                 connections_to_check.append(conn)
             except asyncio.QueueEmpty:
                 break
-        
+
         # Check each connection
         for conn in connections_to_check:
             try:
@@ -146,28 +151,28 @@ class QdrantConnectionPool:
         """Recycle a connection by closing it and creating a new one."""
         try:
             logger.debug("Recycling Qdrant connection")
-            
+
             # Remove old connection
             if old_conn in self.connections:
                 self.connections.remove(old_conn)
             if old_conn in self.connection_health:
                 del self.connection_health[old_conn]
-            
+
             # Try to close old connection
             try:
                 await old_conn.close()
             except Exception:
                 pass  # Ignore close errors
-            
+
             # Create new connection
             new_conn = await self._create_client()
             self.connections.append(new_conn)
             self.connection_health[new_conn] = datetime.utcnow()
             await self.available.put(new_conn)
-            
+
             self.recycled_connections += 1
             logger.debug("Successfully recycled connection")
-            
+
         except Exception as e:
             logger.error(f"Failed to recycle connection: {e}")
 
@@ -175,50 +180,51 @@ class QdrantConnectionPool:
     async def acquire(self) -> AsyncGenerator[AsyncQdrantClient, None]:
         """
         Acquire a connection from the pool.
-        
+
         Usage:
             async with pool.acquire() as client:
                 await client.search(...)
         """
         if not self._initialized:
             await self.initialize()
-        
+
         client = None
         max_retries = 3
         retry_delay = 0.1
-        
+
         for attempt in range(max_retries):
             try:
                 # Get connection with timeout
-                client = await asyncio.wait_for(
-                    self.available.get(), 
-                    timeout=5.0
-                )
-                
+                client = await asyncio.wait_for(self.available.get(), timeout=5.0)
+
                 self.total_requests += 1
-                
+
                 # Yield the connection
                 yield client
-                
+
                 # Return connection to pool on success
                 await self.available.put(client)
                 return
-                
-            except asyncio.TimeoutError:
+
+            except TimeoutError:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Timeout acquiring connection, attempt {attempt + 1}/{max_retries}")
-                    await asyncio.sleep(retry_delay * (2 ** attempt))
+                    logger.warning(
+                        f"Timeout acquiring connection, attempt {attempt + 1}/{max_retries}"
+                    )
+                    await asyncio.sleep(retry_delay * (2**attempt))
                 else:
-                    raise RuntimeError("Failed to acquire connection from pool after retries")
-                    
-            except UnexpectedResponse as e:
+                    raise RuntimeError(
+                        "Failed to acquire connection from pool after retries"
+                    )
+
+            except UnexpectedResponse:
                 # Qdrant error - recycle the connection
                 self.failed_requests += 1
                 if client:
                     await self._recycle_connection(client)
                 raise
-                
-            except Exception as e:
+
+            except Exception:
                 # Other error - return connection to pool
                 self.failed_requests += 1
                 if client:
@@ -232,7 +238,7 @@ class QdrantConnectionPool:
         """
         if not self._initialized:
             await self.initialize()
-        
+
         # Return a random connection for load balancing
         if self.connections:
             return random.choice(self.connections)
@@ -242,7 +248,7 @@ class QdrantConnectionPool:
     async def close(self) -> None:
         """Close all connections in the pool."""
         logger.info("Closing connection pool")
-        
+
         # Cancel health check task
         if self._health_check_task:
             self._health_check_task.cancel()
@@ -250,24 +256,24 @@ class QdrantConnectionPool:
                 await self._health_check_task
             except asyncio.CancelledError:
                 pass
-        
+
         # Close all connections
         for conn in self.connections:
             try:
                 await conn.close()
             except Exception as e:
                 logger.warning(f"Error closing connection: {e}")
-        
+
         self.connections.clear()
         self.connection_health.clear()
-        
+
         # Clear the queue
         while not self.available.empty():
             try:
                 self.available.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        
+
         self._initialized = False
         logger.info("Connection pool closed")
 
@@ -281,8 +287,9 @@ class QdrantConnectionPool:
             "failed_requests": self.failed_requests,
             "recycled_connections": self.recycled_connections,
             "failure_rate": (
-                self.failed_requests / self.total_requests 
-                if self.total_requests > 0 else 0
+                self.failed_requests / self.total_requests
+                if self.total_requests > 0
+                else 0
             ),
         }
 

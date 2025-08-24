@@ -57,7 +57,7 @@ class VectorService:
             timeout=int(settings.qdrant_timeout),
         )
         self.collection_name = settings.qdrant_collection
-        self.vector_size = settings.qdrant_vector_size
+        self.vector_size = settings.embedding_dimension
 
         # Map distance strings to Qdrant Distance enum
         distance_map = {

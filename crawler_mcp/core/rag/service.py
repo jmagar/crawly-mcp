@@ -13,7 +13,6 @@ import re
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from threading import RLock
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -37,7 +36,9 @@ class QueryCache:
         self.cache: dict[str, tuple[RagResult, datetime]] = {}
         self.max_size = max_size
         self.ttl = timedelta(minutes=ttl_minutes)
-        self._lock = RLock()
+        # Using a simple thread-safe approach since cache operations are quick
+        import threading
+        self._lock = threading.Lock()
 
     def _generate_cache_key(
         self,
@@ -860,7 +861,7 @@ class RagService:
                     else None,
                     "reranker_enabled": settings.reranker_enabled,
                     "embedding_model": settings.tei_model,
-                    "vector_dimension": settings.qdrant_vector_size,
+                    "vector_dimension": settings.embedding_dimension,
                     "distance_metric": settings.qdrant_distance,
                 },
             }

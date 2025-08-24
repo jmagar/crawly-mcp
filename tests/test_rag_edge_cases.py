@@ -16,7 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from crawler_mcp.core.rag import RagService, TokenBasedChunker
+from crawler_mcp.core.rag.service import RagService
+from crawler_mcp.core.rag.chunking import TokenBasedChunker
 from crawler_mcp.models.crawl import CrawlResult, CrawlStatus, PageContent
 from crawler_mcp.models.rag import DocumentChunk, SearchMatch
 

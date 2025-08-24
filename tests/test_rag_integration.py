@@ -14,7 +14,7 @@ from datetime import datetime
 import pytest
 from fastmcp import Client
 
-from crawler_mcp.core.rag import RagService
+from crawler_mcp.core.rag.service import RagService
 from crawler_mcp.models.crawl import CrawlResult, CrawlStatus, PageContent
 from crawler_mcp.models.rag import RagQuery
 from crawler_mcp.server import mcp

@@ -368,16 +368,12 @@ class ProcessingPipeline:
         chunks_updated = 0
         chunks_deleted = 0
         existing_chunks_map = {}
-        legacy_chunks_to_delete = []
         new_chunk_ids = set()  # Track new chunk IDs for orphan detection
 
         logger.info(
             f"Processing {total_pages} pages for RAG indexing (dedup={deduplication})"
         )
 
-        # Initialize backwards compatibility variables
-        use_backwards_compatibility = False
-        existing_chunks_list = None
 
         # Step 1: Get existing chunks if deduplication is enabled
         if deduplication and total_pages > 0:
@@ -399,20 +395,6 @@ class ProcessingPipeline:
                     f"Found {len(existing_chunks_map)} existing chunks for {source_url}"
                 )
 
-                # Check if backwards compatibility is needed
-                use_backwards_compatibility = (
-                    self.deduplication_manager.should_use_backwards_compatibility(
-                        existing_chunks_map
-                    )
-                )
-                if use_backwards_compatibility:
-                    logger.info(
-                        f"Detected {len(existing_chunks_map)} chunks with random UUIDs, enabling backwards compatibility mode"
-                    )
-
-                existing_chunks_list = (
-                    existing_chunks if use_backwards_compatibility else None
-                )
 
                 # Fast path optimization
                 if not existing_chunks_map and not force_update:

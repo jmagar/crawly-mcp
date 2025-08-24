@@ -4,7 +4,7 @@ Core business logic services for crawler_mcp.
 
 from .embeddings import EmbeddingService
 from .orchestrator import CrawlerService
-from .rag import RagService
+from .rag.service import RagService
 from .vectors import VectorService
 
 __all__ = [

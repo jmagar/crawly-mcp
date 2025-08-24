@@ -37,7 +37,6 @@ class CrawlerrSettings(BaseSettings):
     qdrant_collection: str = Field(
         default="crawlerr_documents", alias="QDRANT_COLLECTION"
     )
-    qdrant_vector_size: int = Field(default=1024, alias="QDRANT_VECTOR_SIZE")
     qdrant_distance: Literal["cosine", "euclidean", "dot"] = Field(
         default="cosine", alias="QDRANT_DISTANCE"
     )

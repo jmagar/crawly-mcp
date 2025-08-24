@@ -15,16 +15,15 @@ from datetime import datetime, timedelta
 import pytest
 from fastmcp import Client
 
-from crawler_mcp.core.rag import (
+from crawler_mcp.core.rag.chunking import (
     FixedSizeChunker,
-    QueryCache,
-    RagService,
     TokenBasedChunker,
     find_line_boundary,
     find_paragraph_boundary,
     find_sentence_boundary,
     find_word_boundary,
 )
+from crawler_mcp.core.rag.service import QueryCache, RagService
 from crawler_mcp.models.crawl import CrawlResult, CrawlStatus, PageContent
 from crawler_mcp.models.rag import RagQuery
 from crawler_mcp.server import mcp

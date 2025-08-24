@@ -149,7 +149,7 @@ async def health_check(ctx: Context) -> dict[str, Any]:
                 "embedding_service": settings.tei_url,
                 "max_concurrent_crawls": settings.max_concurrent_crawls,
                 "chunk_size": 1000,  # From RAG service
-                "vector_dimension": settings.qdrant_vector_size,
+                "vector_dimension": settings.embedding_dimension,
             },
         }
         services: dict[str, Any] = health_results["services"]
@@ -260,7 +260,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 "reranking": True,
                 "source_filtering": True,
                 "embedding_model": settings.tei_model,
-                "vector_dimension": settings.qdrant_vector_size,
+                "vector_dimension": settings.embedding_dimension,
                 "distance_metric": settings.qdrant_distance,
             },
             "sources": {
@@ -293,7 +293,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
             "vector_database": {
                 "service_url": settings.qdrant_url,
                 "collection": settings.qdrant_collection,
-                "vector_size": settings.qdrant_vector_size,
+                "vector_size": settings.embedding_dimension,
                 "distance": settings.qdrant_distance,
                 "timeout": settings.qdrant_timeout,
             },

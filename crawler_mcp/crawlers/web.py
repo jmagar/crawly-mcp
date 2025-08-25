@@ -5,6 +5,7 @@ Optimized web crawling strategy with streaming and caching support.
 import contextlib
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -236,6 +237,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             pages = []
 
             # Process results outside suppress_stdout context for debugging
+            # Always prefer fit_markdown for cleaner content (filtered by PruningContentFilter)
             prefer_fit_markdown = getattr(request, "prefer_fit_markdown", True)
             for result in successful_results:
                 self.logger.info("Processing successful result for %s", result.url)
@@ -490,6 +492,47 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.warning(f"Failed to extract markdown content: {e}")
             return ""
 
+    def _post_process_content(self, content: str) -> str:
+        """Apply post-processing cleanup to remove UI artifacts and noise."""
+        if not content.strip():
+            return content
+
+        # Remove isolated "Copy" text from code blocks
+        content = re.sub(r"\bCopy\b(?!\s+\w)", "", content)
+
+        # Remove package manager tab patterns (npm/yarn/pnpm/bun)
+        content = re.sub(
+            r"(?:npm|yarn|pnpm|bun)(?:\s+(?:npm|yarn|pnpm|bun))+", "", content
+        )
+
+        # Remove repeated navigation patterns
+        content = re.sub(
+            r"(\b(?:Home|Docs|API|Guide|Tutorial|Examples)\b\s*){3,}", "", content
+        )
+
+        # Remove lines that are only UI commands or single words
+        lines = content.split("\n")
+        filtered_lines = []
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines, single words that look like UI elements, or very short lines
+            if (
+                len(line) > 3
+                and not re.match(
+                    r"^(?:Copy|Edit|Share|Save|Print|Download|View|Show|Hide)$",
+                    line,
+                    re.IGNORECASE,
+                )
+                and not re.match(r"^[A-Za-z]{1,4}$", line)
+            ):  # Skip very short single words
+                filtered_lines.append(line)
+
+        # Rejoin lines and clean up multiple newlines
+        content = "\n".join(filtered_lines)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+
+        return content.strip()
+
     def _to_page_content(
         self, result: Crawl4aiResult, prefer_fit_markdown: bool = True
     ) -> PageContent:
@@ -502,6 +545,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
         # Extract content using the _safe_get_markdown method which follows reference code pattern
         best_content = self._safe_get_markdown(result, prefer_fit_markdown)
+
+        # Apply post-processing cleanup to remove UI artifacts
+        best_content = self._post_process_content(best_content)
 
         # Calculate word count
         word_count = len(best_content.split()) if best_content.strip() else 0
@@ -624,6 +670,16 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             if request.content_selector is not None
             else getattr(settings, "crawl_content_selector", None)
         )
+
+        # If no content selector specified, use semantic HTML5 selectors
+        # This avoids site-specific selectors while targeting main content
+        if content_selector is None:
+            content_selector = (
+                "main, article, .content, [role='main'], .docs-content, .markdown-body"
+            )
+            self.logger.info(
+                "Using semantic HTML5 content selectors for main content detection"
+            )
 
         # Excluded selectors for UI noise removal (join them into a single string)
         excluded_selectors = (

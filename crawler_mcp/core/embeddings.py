@@ -46,6 +46,11 @@ class EmbeddingService:
         """Close the HTTP client."""
         await self.client.aclose()
 
+    def _chunked(self, iterable: list, size: int):
+        """Yield successive chunks from the iterable."""
+        for i in range(0, len(iterable), size):
+            yield iterable[i : i + size]
+
     async def _ensure_client_open(self) -> None:
         """Ensure the HTTP client is open and recreate if closed."""
         if self.client.is_closed:
@@ -217,12 +222,18 @@ class EmbeddingService:
                 raise ToolError(f"Batch embedding failed: {error_msg}")
 
             result = response.json()
+            if not isinstance(result, list):
+                raise ToolError(f"Unexpected TEI response shape: {type(result)}")
+            if len(result) != len(valid_texts):
+                raise ToolError(
+                    f"TEI returned {len(result)} embeddings for {len(valid_texts)} inputs"
+                )
             processing_time = max(time.perf_counter() - start_time, 1e-6)
 
             # Convert to EmbeddingResult objects
             results = []
             for _i, (text, embedding) in enumerate(
-                zip(valid_texts, result, strict=False)
+                zip(valid_texts, result, strict=True)
             ):
                 results.append(
                     EmbeddingResult(
@@ -280,8 +291,7 @@ class EmbeddingService:
         # Split into chunks if needed based on batch_size
         results = []
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
+        for batch in self._chunked(texts, batch_size):
             batch_results = await self.generate_embeddings_true_batch(
                 batch, normalize=normalize, truncate=truncate
             )
@@ -306,7 +316,7 @@ class EmbeddingService:
             raise ToolError("Embeddings must have the same dimensions")
 
         # Compute dot product
-        dot_product = sum(a * b for a, b in zip(embedding1, embedding2, strict=False))
+        dot_product = sum(a * b for a, b in zip(embedding1, embedding2, strict=True))
 
         # Compute magnitudes
         magnitude1 = sum(a * a for a in embedding1) ** 0.5

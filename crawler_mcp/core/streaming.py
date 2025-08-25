@@ -4,8 +4,8 @@ Streaming utilities for processing large datasets efficiently.
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
-from typing import Any, Callable, TypeVar
+from collections.abc import AsyncIterator, Callable
+from typing import Any, TypeVar
 
 from ..config import settings
 from ..models.rag import DocumentChunk
@@ -65,9 +65,7 @@ class ChunkStream:
             return
 
         self._processing = True
-        self._processor_task = asyncio.create_task(
-            self._process_batches(processor)
-        )
+        self._processor_task = asyncio.create_task(self._process_batches(processor))
         logger.info(f"Started chunk stream processing (batch_size: {self.batch_size})")
 
     async def _process_batches(
@@ -80,10 +78,7 @@ class ChunkStream:
         while self._processing:
             try:
                 # Get chunk with timeout to allow periodic batch processing
-                chunk = await asyncio.wait_for(
-                    self.input_queue.get(),
-                    timeout=1.0
-                )
+                chunk = await asyncio.wait_for(self.input_queue.get(), timeout=1.0)
 
                 if chunk is None:
                     # Sentinel value - process remaining batch and stop
@@ -99,7 +94,7 @@ class ChunkStream:
                     await self._process_batch(batch, processor)
                     batch = []
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Timeout - process partial batch if exists
                 if batch:
                     await self._process_batch(batch, processor)
@@ -260,6 +255,7 @@ async def stream_process_chunks(
     store_func: Callable[[list[DocumentChunk]], int],
     batch_size: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    ctx: Any | None = None,
 ) -> tuple[int, int]:
     """
     Stream process chunks with embedding and storage.
@@ -270,6 +266,7 @@ async def stream_process_chunks(
         store_func: Function to store chunks
         batch_size: Batch size for processing
         progress_callback: Optional progress callback
+        ctx: Optional context for client-facing progress messages
 
     Returns:
         Tuple of (total processed, total errors)
@@ -298,8 +295,15 @@ async def stream_process_chunks(
             # Generate embeddings
             embeddings = await embed_func(texts)
 
+            # Validate embedding/batch length matching
+            if not isinstance(embeddings, list) or len(embeddings) != len(batch):
+                raise ValueError(
+                    f"Embedding function returned {len(embeddings) if hasattr(embeddings, '__len__') else 'non-sequence'} "
+                    f"embeddings for {len(batch)} chunks"
+                )
+
             # Attach embeddings to chunks
-            for chunk, embedding in zip(batch, embeddings, strict=False):
+            for chunk, embedding in zip(batch, embeddings, strict=True):
                 chunk.embedding = embedding
 
             # Store chunks
@@ -309,6 +313,10 @@ async def stream_process_chunks(
             # Report progress
             if progress_callback and total_chunks:
                 progress_callback(total_processed, total_chunks)
+
+            # Client-facing progress
+            if ctx and total_chunks:
+                await ctx.info(f"Processed {total_processed}/{total_chunks} chunks")
 
             logger.debug(
                 f"Processed batch {batch_num} ({len(batch)} chunks, {stored} stored)"

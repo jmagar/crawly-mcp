@@ -7,9 +7,10 @@ import functools
 import logging
 import random
 import time
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from ..config import settings
 
@@ -20,6 +21,7 @@ T = TypeVar("T")
 
 class CircuitState(Enum):
     """Circuit breaker states."""
+
     CLOSED = "closed"  # Normal operation
     OPEN = "open"  # Failures exceeded threshold, blocking calls
     HALF_OPEN = "half_open"  # Testing if service recovered
@@ -64,7 +66,16 @@ class CircuitBreaker:
 
     def call(self, func: Callable) -> Any:
         """Execute function with circuit breaker protection."""
-        return asyncio.run(self.async_call(func))
+        # Disallow in running event loop to prevent RuntimeError
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop
+            return asyncio.run(self.async_call(func))
+        else:
+            raise RuntimeError(
+                f"Circuit breaker '{self.name}': call() cannot be used in an active event loop; use 'await async_call(...)' instead"
+            )
 
     async def async_call(self, func: Callable) -> Any:
         """Execute async function with circuit breaker protection."""
@@ -98,12 +109,14 @@ class CircuitBreaker:
             # Failure - update state
             self.failure_count += 1
             self.total_failures += 1
-            self.last_failure_time = datetime.utcnow()
+            self.last_failure_time = datetime.now(UTC)
 
             if self.state == CircuitState.HALF_OPEN:
                 # Recovery failed, reopen circuit
                 self.state = CircuitState.OPEN
-                logger.warning(f"Circuit breaker '{self.name}' reopened after recovery failure")
+                logger.warning(
+                    f"Circuit breaker '{self.name}' reopened after recovery failure"
+                )
 
             elif self.failure_count >= self.failure_threshold:
                 # Too many failures, open circuit
@@ -120,7 +133,7 @@ class CircuitBreaker:
         if self.last_failure_time is None:
             return True
 
-        time_since_failure = datetime.utcnow() - self.last_failure_time
+        time_since_failure = datetime.now(UTC) - self.last_failure_time
         return time_since_failure.total_seconds() >= self.recovery_timeout
 
     def reset(self) -> None:
@@ -142,8 +155,7 @@ class CircuitBreaker:
             "total_successes": self.total_successes,
             "circuit_opens": self.circuit_opens,
             "failure_rate": (
-                self.total_failures / self.total_calls
-                if self.total_calls > 0 else 0
+                self.total_failures / self.total_calls if self.total_calls > 0 else 0
             ),
         }
 
@@ -194,14 +206,11 @@ def exponential_backoff(
                         raise
 
                     # Calculate delay with exponential backoff
-                    delay = min(
-                        initial_delay * (exponential_base ** attempt),
-                        max_delay
-                    )
+                    delay = min(initial_delay * (exponential_base**attempt), max_delay)
 
                     # Add jitter if enabled
                     if jitter:
-                        delay *= (0.5 + random.random())
+                        delay *= 0.5 + random.random()
 
                     logger.warning(
                         f"Function '{func.__name__}' failed (attempt {attempt + 1}/{max_retries}), "
@@ -234,14 +243,11 @@ def exponential_backoff(
                         raise
 
                     # Calculate delay with exponential backoff
-                    delay = min(
-                        initial_delay * (exponential_base ** attempt),
-                        max_delay
-                    )
+                    delay = min(initial_delay * (exponential_base**attempt), max_delay)
 
                     # Add jitter if enabled
                     if jitter:
-                        delay *= (0.5 + random.random())
+                        delay *= 0.5 + random.random()
 
                     logger.warning(
                         f"Function '{func.__name__}' failed (attempt {attempt + 1}/{max_retries}), "
@@ -283,6 +289,8 @@ class RateLimiter:
             per: Time period in seconds
             burst: Maximum burst size (defaults to rate)
         """
+        if rate <= 0 or per <= 0:
+            raise ValueError("RateLimiter requires positive 'rate' and 'per' values")
         self.rate = rate
         self.per = per
         self.burst = burst or rate
@@ -304,8 +312,7 @@ class RateLimiter:
                 now = time.monotonic()
                 elapsed = now - self.last_update
                 self.tokens = min(
-                    self.burst,
-                    self.tokens + elapsed * (self.rate / self.per)
+                    self.burst, self.tokens + elapsed * (self.rate / self.per)
                 )
                 self.last_update = now
 
@@ -340,4 +347,6 @@ def get_circuit_breaker(
 # Pre-configured circuit breakers for services
 qdrant_circuit = get_circuit_breaker("qdrant", failure_threshold=5, recovery_timeout=30)
 tei_circuit = get_circuit_breaker("tei", failure_threshold=3, recovery_timeout=60)
-crawl4ai_circuit = get_circuit_breaker("crawl4ai", failure_threshold=5, recovery_timeout=45)
+crawl4ai_circuit = get_circuit_breaker(
+    "crawl4ai", failure_threshold=5, recovery_timeout=45
+)

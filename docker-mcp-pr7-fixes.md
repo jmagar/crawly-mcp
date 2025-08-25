@@ -6,7 +6,7 @@
 This PR enhances the Docker MCP installer with improved container environment detection, dynamic path management, and comprehensive SSH key distribution capabilities. It replaces the basic embedded SSH setup with a standalone, feature-rich script while maintaining backward compatibility.
 
 - Implements container runtime detection using the `DOCKER_CONTAINER` environment variable
-- Adds dynamic data/config directory resolution for both container and local environments  
+- Adds dynamic data/config directory resolution for both container and local environments
 - Introduces a comprehensive standalone SSH key distribution script with parallel processing and host discovery
 
 ### Reviewed Changes
@@ -120,7 +120,7 @@ Copilot reviewed 6 out of 6 changed files in this pull request and generated 5 c
 > -                sed -i.bak "s|\"8000:8000\"|\"${available_port}:8000\"|g" "$compose_file"
 > -                sed -i.bak "s|FASTMCP_PORT: \"8000\"|FASTMCP_PORT: \"8000\"|g" "$compose_file"
 > -                rm -f "${compose_file}.bak"
-> -                
+> -
 >                  # Store the port for later use
 >                  echo "FASTMCP_PORT=${available_port}" > "${DOCKER_MCP_DIR}/.env"
 >---
@@ -171,11 +171,11 @@ Copilot reviewed 6 out of 6 changed files in this pull request and generated 5 c
 - [ ] [DIFF BLOCK - coderabbitai[bot] - docker_mcp/server.py:28-42]
 >  import structlog
 > +import shlex
-> 
+>
 >      # Before
 > -    df_cmd = ssh_cmd + [f"df -T {path} | tail -1"]
 > +    df_cmd = ssh_cmd + [f"df -T {shlex.quote(path)} | tail -1"]
-> 
+>
 >      # Before
 > -   snap_cmd = ssh_cmd + [f"zfs snapshot {snap_flags} {full_snapshot}".strip()]
 > +   quoted_snapshot = shlex.quote(f"{dataset}@{snapshot_name}")
@@ -465,7 +465,7 @@ Copilot reviewed 6 out of 6 changed files in this pull request and generated 5 c
 
 - [ ] [DIFF BLOCK - coderabbitai[bot] - docker_mcp/server.py:28-42]
 -def get_config_dir() -> Path:
--    """Get config directory based on environment.""" 
+-    """Get config directory based on environment."""
 -    if os.getenv("DOCKER_CONTAINER"):
 -        return Path("/app/config")
 -    else:
@@ -735,7 +735,7 @@ Copilot reviewed 6 out of 6 changed files in this pull request and generated 5 c
 -    description: "Auto-imported from SSH config"
 -    tags: ["auto-imported", "ssh-config"]
 -    enabled: true
--    
+-
 -EOF
 +        cat >> "$config_file" << EOF
 +  "${host_name}":
@@ -778,7 +778,7 @@ import asyncio
  for path in volume_paths:
 +    qpath = shlex.quote(path)
      path_inventory = {}
-     
+
      # Get file count
 -    file_count_cmd = ssh_cmd + [f"find {path} -type f 2>/dev/null | wc -l"]
 +    file_count_cmd = ssh_cmd + [f"find {qpath} -type f 2>/dev/null | wc -l"]
@@ -815,7 +815,7 @@ for rel_path, source_checksum in source_inventory["critical_files"].items():
 +        f"  md5sum {qfile} 2>/dev/null | cut -d' ' -f1; "
 +        f"fi"
 +    ]
-     
+
      result = await asyncio.get_event_loop().run_in_executor(
          None,
 -        lambda: subprocess.run(checksum_cmd, capture_output=True, text=True, check=False)  # nosec B603
@@ -868,16 +868,16 @@ for rel_path, source_checksum in source_inventory["critical_files"].items():
 +        if len(parts) >= 2:
 +            source_path = parts[0]
 +            container_path = parts[1]
-+            
++
 +            # Convert relative paths to absolute
 +            if source_path.startswith("."):
 +                source_path = f"{target_appdata}/{stack_name}/{source_path[2:]}"
 +            elif not source_path.startswith("/"):
 +                # Named volume - needs resolution
 +                source_path = f"{target_appdata}/{stack_name}"
-+            
++
 +            return f"{source_path}:{container_path}"
-+    
++
 +    elif isinstance(volume, dict) and volume.get("type") == "bind":
 +        source = volume.get("source", "")
 +        target = volume.get("target", "")
@@ -885,7 +885,7 @@ for rel_path, source_checksum in source_inventory["critical_files"].items():
 +            if not source.startswith("/"):
 +                source = f"{target_appdata}/{stack_name}/{source}"
 +            return f"{source}:{target}"
-+    
++
 +    return None
 
  def _extract_expected_mounts(self, compose_content: str, target_appdata: str, stack_name: str) -> list[str]:
@@ -1092,7 +1092,7 @@ for container in running_containers:
 - [ ] [DIFF BLOCK - coderabbitai[bot] - docker_mcp/server.py:65-69]
 -    action: str = Field(
 +    action: Literal["list", "add", "ports", "compose_path", "import_ssh", "cleanup", "disk_usage", "schedule"] = Field(
-         ..., 
+         ...,
 -        description="Action to perform (list, add, ports, compose_path, import_ssh, cleanup, disk_usage, schedule)"
 +        description="Action to perform"
      )---
@@ -1119,55 +1119,7 @@ for container in running_containers:
 >     return result
 >---
 
-- [ ] [AI PROMPT - docker-compose.yaml:8]
-In docker-compose.yaml around line 8, the ports mapping uses
-${FASTMCP_PORT:-8011}:${FASTMCP_PORT:-8011} while the environment block and
-Dockerfile expect 8000, causing the container to map 8011 but the app to listen
-on 8000; change the ports mapping to ${FASTMCP_PORT:-8000}:${FASTMCP_PORT:-8000}
-(or otherwise set FASTMCP_PORT to 8000 consistently), and verify the env block
-on line 26 and the Dockerfile EXPOSE also use 8000 so defaults are unified and
-service/healthchecks reach the container.---
-
-- [ ] [AI PROMPT - install.sh:535]
-In install.sh around lines 511 to 535, the standalone script path is declared
-and assigned in one line (SC2155) and uses dirname in a way that can break when
-the file is sourced; also the script is executed directly which fails if not
-executable. Fix by first declare the variable and then assign it, compute a
-robust absolute script directory using BASH_SOURCE fallback (e.g. cd to dirname
-of "${BASH_SOURCE[0]:-$0}" and pwd) to support sourcing, build script_path from
-that directory, and invoke the standalone script with "bash" (bash
-"$script_path" --batch) to avoid relying on the executable bit; keep the
-existing fallback behavior unchanged.---
-
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:7]
-In scripts/setup-ssh-keys.sh around line 7, the script currently uses only "set
--e" which is insufficient for robust failure handling when manipulating SSH
-keys; update the shell options to enable errexit, nounset and pipefail (e.g.,
-set -euo pipefail) and add an ERR trap that logs an error message (including
-exit code and the failing command) and exits nonzero to ensure any runtime or
-unset-variable failures are caught and reported; ensure the trap is defined
-immediately after the shell options so it applies to the whole script.---
-
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:19]
-In scripts/setup-ssh-keys.sh around line 19, the SCRIPT_DIR variable is declared
-but never used (SC2034); either remove the assignment entirely to eliminate the
-unused-variable warning, or use SCRIPT_DIR when referencing files relative to
-the script (e.g., replace any hard-coded or pwd-based relative paths with
-"$SCRIPT_DIR/<file>" or cd "$SCRIPT_DIR" before path operations) so the variable
-is actually used.---
-
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:35]
-In scripts/setup-ssh-keys.sh around lines 28-35 (and also update related logic
-at 124-127, 720-732, 758-762), the current VERIFY_ONLY flag is used as a
-short-circuit that exits early; change semantics so -v/--verify sets a boolean
-(e.g., RUN_VERIFY_AFTER_DISTRIBUTION=true) that does not short-circuit
-distribution but instead causes the script to run the verification step after
-keys are distributed; remove the early-exit branch that returns/exit when
-VERIFY_ONLY is set, update option parsing to set the new flag name, and ensure
-all references at the other mentioned line ranges check the new flag to run
-verification after distribution rather than before/early exiting.---
-
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:205]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:207]
 In scripts/setup-ssh-keys.sh around lines 149 to 205, the prerequisites check
 only detects a GNU timeout named "timeout" but on macOS the GNU coreutils
 timeout is often installed as "gtimeout"; detect and prefer "timeout" then
@@ -1177,7 +1129,7 @@ variable and adjust warning messages when neither is found so macOS users get
 the gtimeout hint; ensure HAS_PARALLEL logic remains unchanged and exit behavior
 for missing required deps is preserved.---
 
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:228]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:230]
 In scripts/setup-ssh-keys.sh around lines 206 to 228, the directory creation
 does not ensure ~/.ssh exists and does not enforce restrictive permissions for
 SSH-related directories and files; update create_directories to create
@@ -1187,7 +1139,7 @@ only attempt to link ${HOME}/.ssh/config after ensuring the source exists;
 finally ensure any created directories use mkdir -p and apply chmod immediately
 after creation to enforce secure layout.---
 
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:320]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:322]
 In scripts/setup-ssh-keys.sh around lines 311-320, avoid SC2155 by declaring the
 local variable before using command substitution and add a clarifying comment
 for the intentional unquoted glob match: change the single-line local+assignment
@@ -1197,16 +1149,7 @@ short inline comment like "# intentional: unquoted to allow glob/wildcard
 matches (SC2053)" to silence future warnings; apply the same change to the
 corresponding occurrences on lines 313-315.---
 
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:394]
-In scripts/setup-ssh-keys.sh around lines 355 to 394, before generating a new
-key ensure the parent directory of $SSH_KEY_PATH exists and has 0700 permissions
-and, when not in DRY_RUN, set those perms prior to calling ssh-keygen; also
-replace the unstable comment that uses hostname with a stable, consistent key
-comment (e.g. "docker-mcp") so generated keys are traceable. Ensure the
-directory creation/chmod step runs only when actually generating the key (skip
-on DRY_RUN), then proceed with existing keygen and file-mode adjustments.---
-
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:423]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:426]
 In scripts/setup-ssh-keys.sh around lines 396-423, the host key scanning is
 fragile: it assumes the timeout binary exists (causing “command not found”),
 writes noisy stderr, and can create duplicate known_hosts entries for host:port
@@ -1217,7 +1160,7 @@ non-empty, and before appending remove any existing entry for that host/port
 using ssh-keygen -R with the proper "[hostname]:port" bracket form for
 non-default ports so entries are deduplicated.---
 
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:567]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:570]
 In scripts/setup-ssh-keys.sh around lines 540 to 567, parallel background jobs
 call distribute_to_host which may concurrently append to the same output file
 causing interleaved writes; change the implementation so each host writes to its
@@ -1227,7 +1170,7 @@ with a single serial operation (cat or mv) or use flock around the final append
 to ensure atomicity; ensure temp files are cleaned up and handle failures by
 skipping absent temp files.---
 
-- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:647]
+- [ ] [AI PROMPT - scripts/setup-ssh-keys.sh:650]
 In scripts/setup-ssh-keys.sh around lines 632 to 647, the generated YAML still
 writes identity_file: ${SSH_KEY_PATH} and leaves values unquoted; update the
 loop to read the actual key path from each host_entry (e.g., IFS='|' read -r
@@ -1239,46 +1182,7 @@ SSH config"', tags: '["auto-imported","ssh-config"]', enabled: true). Ensure
 quoting uses double quotes around interpolated variables so IPv6 and special
 characters are preserved.---
 
-- [ ] [AI PROMPT - docker_mcp/core/migration/__init__.py:8]
-In docker_mcp/core/migration/__init__.py around lines 5 to 8, remove the
-trailing whitespace at the end of the "from .verification import
-MigrationVerifier  " line and ensure the file ends with a single trailing
-newline; trim any other extraneous trailing spaces on these lines and save the
-file with a newline at EOF to satisfy linters.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:8]
-In docker_mcp/core/migration/verification.py around lines 3-8 (and similarly for
-lines 55-85), the review flags two issues: unquoted remote path/stack variables
-used in shell commands (injection risk) and lambdas that capture loop variables
-(late-binding). Fix by importing shlex and wrap any path/stack/remote variables
-passed into shell commands with shlex.quote (or avoid shell=True and pass args
-list), and replace lambdas that reference loop variables with functions that
-bind current values via default arguments (e.g., lambda x=val: ...) or use
-functools.partial so each executor task gets the correct captured value. Ensure
-no unquoted interpolation into subprocess calls and avoid late-binding by
-binding loop variables at lambda creation.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:13]
-In docker_mcp/core/migration/verification.py around lines 11 to 13, the imported
-symbol DockerHost is unused; remove the unused import (delete "DockerHost" from
-the from ..config_loader import line) so only DockerMCPError is imported, and
-run linting to ensure no other unused imports remain.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:241]
-In docker_mcp/core/migration/verification.py around lines 220 to 245, the
-checksum command currently injects the unquoted target path and always uses
-md5sum; update it to securely quote the remote path (use shlex.quote or
-equivalent) when building the ssh command and prefer sha256sum with a fallback
-to md5sum if sha256sum is not available. Build a remote command string that
-first tries "sha256sum <quoted_path> 2>/dev/null | cut -d' ' -f1" and if that
-returns empty/non-zero, try "md5sum <quoted_path> 2>/dev/null | cut -d' ' -f1";
-capture which algorithm produced the checksum and store it in the verification
-dict (e.g., algorithm: "sha256" or "md5"), and when both fail mark verified
-False with an appropriate error message. Use subprocess.run safely via the
-executor as before but pass a single remote command string to ssh, and ensure
-stdout is checked/stripped before comparing to the source checksum.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:312]
+- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:370]
 In docker_mcp/core/migration/verification.py around lines 284-316,
 verify_container_integration is doing too many things (inspecting container,
 extracting mounts, checking in-container data access, and collecting startup
@@ -1292,18 +1196,7 @@ stack_name) -> list[str] to gather startup logs/errors; update
 verify_container_integration to call these helpers and compose the verification
 dict (apply same extraction pattern to the similar logic at lines 403-423).---
 
-- [ ] [AI PROMPT - docker_mcp/core/migration/verification.py:328]
-In docker_mcp/core/migration/verification.py around lines 318 to 332 (and also
-apply the same fix to lines 378-397), the docker command is vulnerable to shell
-word-splitting and glob expansion for stack_name and the lambda captures the
-outer variable late; fix by constructing commands safely using
-shlex.quote(stack_name) (or otherwise wrap/escape the stack_name in single
-quotes) when building the docker inspect/run strings so special characters and
-spaces are preserved, and bind the command into the lambda to avoid late-binding
-(e.g., use lambda cmd=inspect_cmd: subprocess.run(cmd, ...)) when calling
-run_in_executor.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/volume_parser.py:26]
+- [ ] [AI PROMPT - docker_mcp/core/migration/volume_parser.py:27]
 In docker_mcp/core/migration/volume_parser.py around line 26, the
 parse_compose_volumes method is too complex (exceeds Ruff's C901); refactor by
 extracting two helpers: one to walk and collect all service volume entries
@@ -1313,22 +1206,4 @@ structure (handle bind/volume/short syntax, parse source:target:mode, resolve
 relative host paths against source_appdata_path, and apply defaults). Replace
 the in-method loops with calls to these helpers, keep behavior and tests
 unchanged, and ensure proper typing and docstrings for each helper so
-parse_compose_volumes becomes a high-level orchestration function.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/volume_parser.py:107]
-In docker_mcp/core/migration/volume_parser.py around lines 105 to 107, the call
-to expanded_volume_str.split(":") can over-split volume strings that include a
-third "mode" segment; change it to expanded_volume_str.split(":", 2) so only the
-first two ":" are split into at most three parts, preserving the mode portion,
-and update any subsequent logic that relies on parts length accordingly.---
-
-- [ ] [AI PROMPT - docker_mcp/core/migration/volume_parser.py:149]
-In docker_mcp/core/migration/volume_parser.py around lines 147-149 (and also
-apply the same change to lines 150-155), the constructed inspect command must
-quote the volume_name to prevent shell interpretation and the per-iteration
-command must be frozen when passed to the executor to avoid late-binding: change
-inspect_cmd to use a quoted volume_name (e.g. f"docker volume inspect
-'{volume_name}' --format '{{{{.Mountpoint}}}}'") and when creating the lambda
-for execution capture the current command as a default argument or use
-functools.partial (e.g. lambda cmd=full_cmd: run(cmd) or partial(run, full_cmd))
-so each task uses its own frozen command.
+parse_compose_volumes becomes a high-level orchestration function.

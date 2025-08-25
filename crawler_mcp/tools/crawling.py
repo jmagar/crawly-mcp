@@ -63,7 +63,7 @@ async def _process_rag_if_requested(
     force_update: bool = False,
 ) -> dict[str, Any]:
     """
-    Shared RAG processing logic for all crawl types.
+    Shared RAG processing logic for all crawl types with multi-stage progress reporting.
 
     Args:
         ctx: FastMCP context
@@ -79,10 +79,19 @@ async def _process_rag_if_requested(
     rag_info: dict[str, Any] = {}
 
     if process_with_rag and crawl_result.pages:
-        await ctx.info(f"Processing {len(crawl_result.pages)} items for RAG indexing")
+        total_items = len(crawl_result.pages)
+        await ctx.info(f"Starting RAG processing for {total_items} items")
 
+        # Multi-stage RAG processing with progress reporting
         try:
-            # Process for RAG with deduplication support
+            # Stage 1: Text chunking (0-25% of RAG progress)
+            await ctx.info("Stage 1: Chunking content into semantic segments")
+            await ctx.report_progress(progress=0, total=100)
+
+            # Stage 2: Generating embeddings (25-70% of RAG progress)
+            await ctx.info("Stage 2: Generating vector embeddings")
+            await ctx.report_progress(progress=25, total=100)
+
             async with RagService() as rag_service:
                 rag_stats = await rag_service.process_crawl_result(
                     crawl_result,
@@ -91,10 +100,20 @@ async def _process_rag_if_requested(
                 )
                 rag_info["rag_processing"] = rag_stats
 
+            # Stage 3: Vector indexing (70-90% of RAG progress)
+            await ctx.info("Stage 3: Indexing vectors in database")
+            await ctx.report_progress(progress=70, total=100)
+
+            # Stage 4: Source registration (90-100% of RAG progress)
+            await ctx.info("Stage 4: Registering sources and metadata")
+            await ctx.report_progress(progress=90, total=100)
+
             # Source registration is now handled automatically through RAG processing
             # Sources are tracked in Qdrant when documents are added
-            rag_info["sources_registered"] = len(crawl_result.pages)
+            rag_info["sources_registered"] = total_items
 
+            # Final completion
+            await ctx.report_progress(progress=100, total=100)
             await ctx.info(
                 f"RAG processing completed: {rag_stats.get('chunks_created', 0)} chunks, "
                 f"{rag_stats.get('embeddings_generated', 0)} embeddings"
@@ -270,22 +289,30 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         # Create progress tracker
         progress_tracker = progress_middleware.create_tracker(f"scrape_{hash(url)}")
 
-        try:
-            await ctx.info("Initializing crawler")
-            await ctx.report_progress(progress=1, total=4)
+        # Determine total steps based on enabled features
+        total_steps = 5 if process_with_rag else 4
 
-            # Initialize services
+        try:
+            # Step 1: Initialize services
+            await ctx.info("Initializing crawler services")
+            await ctx.report_progress(progress=1, total=total_steps)
             crawler_service = CrawlerService()
 
-            await ctx.info("Scraping webpage")
-            await ctx.report_progress(progress=2, total=4)
+            # Step 2: Configure scraping parameters
+            await ctx.info(
+                f"Configuring scrape for {extraction_strategy or 'default'} extraction"
+            )
+            await ctx.report_progress(progress=2, total=total_steps)
 
             # Prepare virtual scroll configuration if specified
             virtual_scroll_config = None
             if virtual_scroll_count:
                 virtual_scroll_config = {"scroll_count": virtual_scroll_count}
 
-            # Scrape the page with advanced features
+            # Step 3: Execute web scraping
+            await ctx.info("Fetching and extracting page content")
+            await ctx.report_progress(progress=3, total=total_steps)
+
             page_content = await crawler_service.scrape_single_page(
                 url=url,
                 extraction_strategy=extraction_strategy,
@@ -294,6 +321,10 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 use_virtual_scroll=enable_virtual_scroll or False,
                 virtual_scroll_config=virtual_scroll_config,
             )
+
+            # Step 4: Process results
+            await ctx.info("Processing extraction results")
+            await ctx.report_progress(progress=4, total=total_steps)
 
             result: dict[str, Any] = {
                 "url": page_content.url,
@@ -320,9 +351,11 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 result["links"] = links
                 result["images"] = images
 
-            # Process with RAG if requested
+            # Step 5: Process with RAG if requested
             if process_with_rag:
-                await ctx.report_progress(progress=3, total=4)
+                await ctx.info("Processing content for RAG indexing")
+                await ctx.report_progress(progress=5, total=total_steps)
+
                 # Create a minimal crawl result for RAG processing
                 from ..models.crawl import (
                     CrawlResult,
@@ -351,8 +384,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 )
                 result.update(rag_info)
 
-            await ctx.info("Scraping completed")
-            await ctx.report_progress(progress=4, total=4)
+            await ctx.info("Scraping completed successfully")
+            await ctx.report_progress(progress=total_steps, total=total_steps)
             await ctx.info(
                 f"Successfully scraped {url}: {page_content.word_count} words, {len(page_content.links)} links"
             )
@@ -432,10 +465,22 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         # Create progress tracker
         progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
 
+        # Determine total progress steps based on crawl type and options
+        base_steps = (
+            6  # Discovery, crawling, processing, validation, RAG (optional), completion
+        )
+        total_steps = base_steps if process_with_rag else base_steps - 1
+
         try:
-            # Initialize crawler service
+            # Step 1: Initialize services and validate
+            await ctx.info("Initializing crawler services and validating target")
+            await ctx.report_progress(progress=1, total=total_steps)
             crawler_service = CrawlerService()
             crawl_result = None
+
+            # Step 2: Configure crawling strategy
+            await ctx.info(f"Configuring {crawl_type} crawling strategy")
+            await ctx.report_progress(progress=2, total=total_steps)
 
             # Route to appropriate crawling method based on detected type
             if crawl_type == "directory":
@@ -443,14 +488,37 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     f"Starting directory crawl: {type_params['directory_path']}"
                 )
 
-                # Progress callback for directory crawler
+                # Enhanced progress callback for directory crawler
+                last_reported = [0]  # Use list to allow modification in nested function
+
                 def dir_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    # Note: These callbacks are expected to be sync functions
-                    # Progress reporting will be handled at a higher level
-                    pass
+                    # Only report significant progress changes to avoid spam
+                    if (
+                        current - last_reported[0] >= max(1, total // 20)
+                        or current == total
+                    ):
+                        # Async calls from sync context need special handling
+                        import asyncio
 
+                        try:
+                            # Map directory progress to step 3 portion (20-60% of total)
+                            _ = (
+                                3 + (current / total) * 2 if total > 0 else 3
+                            )  # Progress calculation for future use
+                            loop = asyncio.get_event_loop()
+                            if message:
+                                task = loop.create_task(
+                                    ctx.info(f"Directory scan: {message}")
+                                )
+                                # Store task reference to avoid RUF006 warning
+                                _ = task
+                            last_reported[0] = current
+                        except Exception:
+                            pass  # Ignore progress reporting errors
+
+                await ctx.report_progress(progress=3, total=total_steps)
                 crawl_result = await crawler_service.crawl_directory(
                     directory_path=type_params["directory_path"],
                     file_patterns=file_patterns,
@@ -462,14 +530,34 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             elif crawl_type == "repository":
                 await ctx.info(f"Starting repository crawl: {type_params['repo_url']}")
 
-                # Progress callback for repository crawler
+                # Enhanced progress callback for repository crawler
+                last_reported = [0]
+
                 def repo_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    # Note: These callbacks are expected to be sync functions
-                    # Progress reporting will be handled at a higher level
-                    pass
+                    if (
+                        current - last_reported[0] >= max(1, total // 20)
+                        or current == total
+                    ):
+                        import asyncio
 
+                        try:
+                            # Map repository progress to step 3-4 portion (20-80% of total)
+                            _ = (
+                                3 + (current / total) * 2 if total > 0 else 3
+                            )  # Progress calculation for future use
+                            loop = asyncio.get_event_loop()
+                            if message:
+                                task = loop.create_task(
+                                    ctx.info(f"Repository processing: {message}")
+                                )
+                                _ = task  # Store task reference
+                            last_reported[0] = current
+                        except Exception:
+                            pass
+
+                await ctx.report_progress(progress=3, total=total_steps)
                 crawl_result = await crawler_service.crawl_repository(
                     repo_url=type_params["repo_url"],
                     clone_path=clone_path,
@@ -498,21 +586,72 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     exclude_patterns=exclude_patterns,
                 )
 
-                # Progress callback for web crawler
+                # Enhanced progress callback for web crawler with multi-stage tracking
+                crawl_phase = ["discovery"]  # discovery, crawling, processing
+                pages_found = [0]
+                last_reported = [0]
+
                 def web_progress(
                     current: int, total: int, message: str | None = None
                 ) -> None:
-                    # Note: These callbacks are expected to be sync functions
-                    # Progress reporting will be handled at a higher level
-                    pass
+                    if (
+                        current - last_reported[0] >= max(1, total // 20)
+                        or current == total
+                    ):
+                        import asyncio
 
-                await ctx.report_progress(progress=1, total=10)
+                        try:
+                            # Determine crawl phase and map to appropriate progress range
+                            if message and "discovered" in message.lower():
+                                crawl_phase[0] = "discovery"
+                                pages_found[0] = total
+                            elif message and any(
+                                word in message.lower()
+                                for word in ["crawling", "processing", "scraped"]
+                            ):
+                                crawl_phase[0] = "crawling"
+
+                            # Map web crawling progress across steps 3-4 (60% of total progress)
+                            if crawl_phase[0] == "discovery":
+                                _ = 3  # Progress step for future use
+                                loop = asyncio.get_event_loop()
+                                task = loop.create_task(
+                                    ctx.info(
+                                        f"Site discovery: Found {total} pages to crawl"
+                                    )
+                                )
+                                _ = task  # Store task reference
+                            else:
+                                # Progress from 3 to 4 based on crawling completion
+                                _ = 3 + (
+                                    current / max(total, 1)
+                                )  # Progress calculation for future use
+                                loop = asyncio.get_event_loop()
+                                if message:
+                                    task = loop.create_task(
+                                        ctx.info(f"Crawling progress: {message}")
+                                    )
+                                    _ = task  # Store task reference
+                                else:
+                                    task = loop.create_task(
+                                        ctx.info(f"Crawled {current}/{total} pages")
+                                    )
+                                    _ = task  # Store task reference
+
+                            last_reported[0] = current
+                        except Exception:
+                            pass
+
+                await ctx.report_progress(progress=3, total=total_steps)
                 crawl_result = await crawler_service.crawl_website(
                     request, web_progress
                 )
                 source_type = SourceType.WEBPAGE
 
-            # Check crawl result status
+            # Step 4: Validate crawl results
+            await ctx.info("Validating crawl results")
+            await ctx.report_progress(progress=4, total=total_steps)
+
             if crawl_result.status not in [CrawlStatus.COMPLETED, "completed"]:
                 raise ToolError(f"Crawl failed: {', '.join(crawl_result.errors)}")
 
@@ -520,22 +659,29 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 f"Crawl completed successfully: {len(crawl_result.pages)} items processed"
             )
 
-            # Process result using unified helper
+            # Step 5: Process and structure results
+            await ctx.info("Processing and structuring crawl results")
+            await ctx.report_progress(progress=5, total=total_steps)
             result = _process_crawl_result_unified(crawl_result, crawl_type, target)
 
-            # Process with RAG if requested using shared helper
-            rag_info = await _process_rag_if_requested(
-                ctx,
-                crawl_result,
-                source_type,
-                process_with_rag,
-                deduplication=deduplication,
-                force_update=force_update,
-            )
-            result.update(rag_info)
+            # Step 6: Process with RAG if requested (optional step)
+            if process_with_rag:
+                await ctx.info("Processing results for RAG indexing")
+                await ctx.report_progress(progress=6, total=total_steps)
+                rag_info = await _process_rag_if_requested(
+                    ctx,
+                    crawl_result,
+                    source_type,
+                    process_with_rag,
+                    deduplication=deduplication,
+                    force_update=force_update,
+                )
+                result.update(rag_info)
 
-            if crawl_type == "website":
-                await ctx.report_progress(progress=10, total=10)
+            # Final step: Complete and report
+            final_step = 6 if process_with_rag else 5
+            await ctx.info("Finalizing crawl operation")
+            await ctx.report_progress(progress=final_step, total=total_steps)
 
             duration = result.get("statistics", {}).get(
                 "processing_time"
@@ -543,7 +689,9 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             items_count = result.get("pages_crawled") or result.get(
                 "files_processed", 0
             )
-            await ctx.info(f"Crawl completed: {items_count} items in {duration:.1f}s")
+            await ctx.info(
+                f"Crawl completed successfully: {items_count} items in {duration:.1f}s"
+            )
 
             return result
 

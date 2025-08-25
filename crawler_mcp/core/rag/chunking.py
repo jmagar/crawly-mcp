@@ -7,6 +7,7 @@ into optimal chunks for embedding generation and vector search.
 
 import logging
 import re
+import threading
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -65,28 +66,55 @@ def find_word_boundary(search_text: str, ideal_end: int) -> int | None:
 class TokenCounter:
     """Accurate token counting with multiple tokenizer support."""
 
+    # Class-level tokenizer caching to prevent repeated downloads
+    _tokenizer = None
+    _tokenizer_type = "word-estimate"
+    _tokenizer_lock = threading.Lock()
+    _tokenizer_initialized = False
+
     def __init__(self):
-        self.tokenizer = None
-        self.tokenizer_type = "word-estimate"  # Default to word estimation
         self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO  # Use Qwen3's ratio (1.4)
 
-        # Initialize Qwen3 tokenizer to match embedding service
-        try:
-            from transformers import AutoTokenizer
+        # Initialize tokenizer once at class level
+        self._ensure_tokenizer_initialized()
 
-            # Use the same model as your embedding service
-            model_name = getattr(settings, "tei_model", "Qwen/Qwen3-Embedding-0.6B")
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.tokenizer_type = "qwen3"
-            logger.info(f"Initialized Qwen3 tokenizer from {model_name}")
-        except ImportError:
-            logger.info(
-                "transformers not available (install with [ml] extra); using word-based estimation"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to load Qwen3 tokenizer: {e}; using word-based estimation"
-            )
+        # Set instance variables from class-level cache
+        self.tokenizer = TokenCounter._tokenizer
+        self.tokenizer_type = TokenCounter._tokenizer_type
+
+    @classmethod
+    def _ensure_tokenizer_initialized(cls):
+        """Initialize tokenizer once per class, thread-safe."""
+        if cls._tokenizer_initialized:
+            return
+
+        with cls._tokenizer_lock:
+            # Double-check pattern - another thread might have initialized while we waited
+            if cls._tokenizer_initialized:
+                return
+
+            try:
+                from transformers import AutoTokenizer
+
+                # Use the same model as your embedding service
+                model_name = getattr(settings, "tei_model", "Qwen/Qwen3-Embedding-0.6B")
+                cls._tokenizer = AutoTokenizer.from_pretrained(model_name)
+                cls._tokenizer_type = "qwen3"
+                logger.info(f"Initialized shared Qwen3 tokenizer from {model_name}")
+            except ImportError:
+                logger.info(
+                    "transformers not available (install with [ml] extra); using word-based estimation"
+                )
+                cls._tokenizer = None
+                cls._tokenizer_type = "word-estimate"
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load Qwen3 tokenizer: {e}; using word-based estimation"
+                )
+                cls._tokenizer = None
+                cls._tokenizer_type = "word-estimate"
+            finally:
+                cls._tokenizer_initialized = True
 
     def count_tokens(self, text: str) -> int:
         """

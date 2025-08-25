@@ -233,7 +233,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
 
     return {
         "server": {
-            "name": "Crawlerr",
+            "name": "Crawler-MCP",
             "description": "RAG-enabled web crawling MCP server",
             "version": "0.1.0",
             "framework": "FastMCP 2.0+",
@@ -315,48 +315,55 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
 # Server lifecycle management will be handled by FastMCP automatically
 async def startup_checks() -> None:
     """Initialize services and perform startup checks."""
-    logger.info("[bold]📋 Starting Crawlerr server v0.1.0[/bold]")
+    # Server info section
+    logger.info("[bold cyan]▶ Configuration:[/bold cyan]")
     logger.info(
-        "[dim]🐛 Debug mode: %s | 🏭 Production: %s[/dim]",
-        settings.debug,
-        settings.production,
+        "  • Mode: Debug %s | Production: %s", settings.debug, settings.production
     )
+    logger.info("  • Endpoints:")
+    logger.info("    - Qdrant: [blue]%s[/blue]", settings.qdrant_url)
+    logger.info("    - TEI: [purple]%s[/purple]", settings.tei_url)
+    logger.info("  • Models:")
+    logger.info("    - Embedding: [magenta]%s[/magenta]", settings.tei_model)
+    logger.info("    - Reranker: [yellow]%s[/yellow]", settings.reranker_model)
+    logger.info("  • Timeout: [red]%ss[/red]", settings.crawler_timeout)
+    logger.info("")
 
-    # Log service endpoints with emojis
-    logger.info("[blue]🗂️  Qdrant endpoint: %s[/blue]", settings.qdrant_url)
-    logger.info("[purple]🤖 TEI endpoint: %s[/purple]", settings.tei_url)
-    logger.info("[magenta]🧠 TEI model: %s[/magenta]", settings.tei_model)
-    logger.info("[yellow]🔄 Reranker model: %s[/yellow]", settings.reranker_model)
-    logger.info("[red]⏱️  Crawl timeout: %ss[/red]", settings.crawler_timeout)
+    # Health check section
+    logger.info("[bold cyan]▶ Service Health:[/bold cyan]")
 
-    # Perform basic health check
     try:
-        # Check if services are reachable
+        # Check embedding service
         async with EmbeddingService() as embedding_service:
             embedding_healthy = await embedding_service.health_check()
-            status = "[green]✅[/green]" if embedding_healthy else "[red]❌[/red]"
-            logger.info("🚀 Embedding service health: %s", status)
+            status = "✅" if embedding_healthy else "❌"
+            logger.info("  %s Embedding service", status)
 
+        # Check vector service
         async with VectorService() as vector_service:
             vector_healthy = await vector_service.health_check()
-            # Ensure collection exists
             collection_created = await vector_service.ensure_collection()
-            v_status = "[green]✅[/green]" if vector_healthy else "[red]❌[/red]"
-            c_status = "[green]✅[/green]" if collection_created else "[red]❌[/red]"
-            logger.info("🗄️  Vector service health: %s", v_status)
-            logger.info("📚 Vector collection ready: %s", c_status)
+            v_status = "✅" if vector_healthy else "❌"
+            c_status = "✅" if collection_created else "❌"
+            logger.info("  %s Vector database", v_status)
+            logger.info("  %s Collection ready", c_status)
 
-        logger.info("[bold green]🎉 Crawlerr server started successfully![/bold green]")
+        logger.info("")
+        logger.info(
+            "[bold green]✨ Crawler-MCP ready on %s:%s[/bold green]",
+            settings.server_host,
+            settings.server_port,
+        )
 
     except ToolError:
         logger.exception("[red]❌ Critical startup error[/red]")
-        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
+        logger.info("[dim]Server started but some services may be unavailable[/dim]")
     except (ConnectionError, TimeoutError) as e:
-        logger.warning("[yellow]⚠️  Service connection failed: %s[/yellow]", e)
-        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
+        logger.warning("  ❌ Service connection failed: %s", e)
+        logger.info("[dim]Server started but some services may be unavailable[/dim]")
     except Exception:
-        logger.exception("[red]💥 Unexpected startup error[/red]")
-        logger.info("[dim]🤷 Server started but some services may be unavailable[/dim]")
+        logger.exception("[red]❌ Unexpected startup error[/red]")
+        logger.info("[dim]Server started but some services may be unavailable[/dim]")
 
 
 # CLI entry point
@@ -365,21 +372,14 @@ def main() -> None:
     try:
         # Rich startup banner
         console = Console()
-        console.print(
-            "\n[bold blue]🕷️  Crawly MCP Server[/bold blue]", style="bold blue"
-        )
-        console.print("[dim]RAG-Enabled Web Crawling with Qwen3 Intelligence[/dim]\n")
+        console.print("")
+        console.print("[bold blue]🕷️  Crawler-MCP Server v0.1.0[/bold blue]")
+        console.print("[blue]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/blue]")
+        console.print("[dim]RAG-Enabled Web Crawling Server[/dim]")
+        console.print("")
 
         # Run startup checks
-        logger.info("[green]🚀 Starting Crawlerr FastMCP server...[/green]")
         asyncio.run(startup_checks())
-
-        # Start the FastMCP server with HTTP transport
-        logger.info(
-            "[cyan]🌐 Starting FastMCP server on %s:%s[/cyan]",
-            settings.server_host,
-            settings.server_port,
-        )
 
         # Import uvicorn for server
         import uvicorn

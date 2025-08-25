@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from fastmcp.exceptions import ToolError
 
 from ...config import settings
+from ...models.crawl import CrawlResult
 from ...models.rag import DocumentChunk, RagQuery, RagResult, SearchMatch
 from ..embeddings import EmbeddingService
 from ..vectors import VectorService
@@ -488,7 +489,7 @@ class RagService:
 
     async def process_crawl_result(
         self,
-        crawl_result: Any,
+        crawl_result: CrawlResult,
         deduplication: bool | None = None,
         force_update: bool = False,
         progress_callback: Callable[..., None] | None = None,

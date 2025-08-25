@@ -292,7 +292,7 @@ async def stream_process_chunks(
             texts = [chunk.content for chunk in batch]
 
             # Generate embeddings
-            embeddings = embed_func(texts)
+            embeddings = await embed_func(texts)
 
             # Validate embedding/batch length matching
             if not isinstance(embeddings, list) or len(embeddings) != len(batch):
@@ -306,7 +306,7 @@ async def stream_process_chunks(
                 chunk.embedding = embedding
 
             # Store chunks
-            stored = store_func(batch)
+            stored = await store_func(batch)
             total_processed += stored
 
             # Report progress

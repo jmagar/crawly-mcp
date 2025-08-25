@@ -10,6 +10,7 @@ import logging
 import time
 from asyncio import Queue, Semaphore
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from ...config import settings
@@ -18,6 +19,15 @@ from ...core.vectors import VectorService
 from ...models.rag import DocumentChunk
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EmbeddingResult:
+    """Result of an embedding operation with success/failure information."""
+
+    success: bool
+    embedding: list[float] | None = None
+    error: str | None = None
 
 
 class EmbeddingCache:
@@ -395,15 +405,26 @@ class EmbeddingPipeline:
         batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
         # Flatten results
-        all_embeddings: list[list[float] | None] = []
+        all_embeddings: list[EmbeddingResult] = []
         for i, result in enumerate(batch_results):
             if isinstance(result, Exception):
                 logger.error(f"Batch processing failed: {result}")
                 # Mark failed items clearly so upstream can decide to skip them
                 batch_texts = text_batches[i]
-                all_embeddings.extend([None for _ in batch_texts])
+                all_embeddings.extend(
+                    [
+                        EmbeddingResult(success=False, error=str(result))
+                        for _ in batch_texts
+                    ]
+                )
             else:
-                all_embeddings.extend(result)
+                # Convert successful embeddings to EmbeddingResult instances
+                all_embeddings.extend(
+                    [
+                        EmbeddingResult(success=True, embedding=embedding)
+                        for embedding in result
+                    ]
+                )
 
         return all_embeddings
 

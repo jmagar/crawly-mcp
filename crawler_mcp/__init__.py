@@ -1,5 +1,5 @@
 """
-Crawlerr - FastMCP RAG-enabled web crawling MCP server
+Crawler-MCP - FastMCP RAG-enabled web crawling MCP server
 
 A production-ready MCP server that combines:
 - Advanced web crawling with Crawl4AI 0.7.0
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
 __version__ = "0.1.0"
-__author__ = "Crawlerr Team"
+__author__ = "Crawler-MCP Team"
 __description__ = "RAG-enabled web crawling MCP server"
 
 # Main exports - use lazy imports to avoid module conflicts

@@ -422,25 +422,25 @@ class CrawlerrSettings(BaseSettings):
     )
 
     crawl_content_selector: str | None = Field(
-        default=None,
+        default="#main-content, main, article, .content, [role='main']",
         alias="CRAWL_CONTENT_SELECTOR",
-        description="CSS selector to focus on main content area (e.g., '#main-content', '.doc-content')",
+        description="CSS selector to focus on main content area using common semantic patterns",
     )
 
     crawl_pruning_threshold: float = Field(
-        default=0.7,
+        default=0.55,
         alias="CRAWL_PRUNING_THRESHOLD",
         ge=0.0,
         le=1.0,
-        description="Threshold for content relevance in PruningContentFilter (0.7 = more aggressive filtering)",
+        description="Threshold for content relevance in PruningContentFilter (0.55 = moderate filtering to remove nav noise)",
     )
 
     crawl_min_word_threshold: int = Field(
-        default=30,
+        default=15,
         alias="CRAWL_MIN_WORD_THRESHOLD",
         ge=5,
         le=100,
-        description="Minimum words required for content blocks to be included (higher = less noise)",
+        description="Minimum words required for content blocks to be included (15 = balanced filtering)",
     )
 
     crawl_prefer_fit_markdown: bool = Field(

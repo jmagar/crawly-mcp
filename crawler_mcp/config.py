@@ -370,12 +370,8 @@ class CrawlerrSettings(BaseSettings):
             "header",
             "footer",
             "aside",
-            "sidebar",
-            "form",
-            "button",
-            "input",
-            "select",
-            "textarea",
+            "script",
+            "style",
         ],
         alias="CRAWL_EXCLUDED_TAGS",
         description="HTML tags to exclude during content extraction for cleaner markdown",
@@ -459,10 +455,12 @@ class CrawlerrSettings(BaseSettings):
 
         # Add aggressive selectors only if strict filtering is enabled
         if self.crawl_strict_ui_filtering:
-            base_selectors.extend([
-                ".alert",
-                ".notification",
-            ])
+            base_selectors.extend(
+                [
+                    ".alert",
+                    ".notification",
+                ]
+            )
 
         return base_selectors
 
@@ -609,7 +607,7 @@ class CrawlerrSettings(BaseSettings):
         """Compute exponential backoff delay with jitter."""
         base_delay = min(
             self.retry_max_delay,
-            self.retry_initial_delay * (self.retry_exponential_base ** attempts),
+            self.retry_initial_delay * (self.retry_exponential_base**attempts),
         )
         # Apply jitter (±20%)
         jittered_delay = base_delay * random.uniform(0.8, 1.2)
@@ -655,7 +653,9 @@ class CrawlerrSettings(BaseSettings):
             import logging
 
             logger = logging.getLogger(__name__)
-            derived_batch_size = max(1, self.tei_max_batch_tokens // self.tei_tokens_per_item)
+            derived_batch_size = max(
+                1, self.tei_max_batch_tokens // self.tei_tokens_per_item
+            )
             logger.warning(
                 "TEI batch size %s * %s tokens/item = %s exceeds TEI_MAX_BATCH_TOKENS %s. "
                 "Consider reducing to %s for optimal performance.",

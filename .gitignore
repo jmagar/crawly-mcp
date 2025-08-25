@@ -146,3 +146,7 @@ ipython_config.py
 *.crt
 *.p12
 .serena/
+
+# PR and fix documentation files
+*-fixes.md
+vector_db_base_urls.md

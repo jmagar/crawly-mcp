@@ -166,4 +166,9 @@ markers = [
     "asyncio: marks tests as asyncio tests",
 ]
 
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+]
+
 # Dependency groups removed - use project.optional-dependencies instead

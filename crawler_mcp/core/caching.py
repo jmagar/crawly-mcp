@@ -52,7 +52,9 @@ class TTLCache(Generic[T]):
         """Start the cleanup task."""
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            logger.debug(f"Started TTL cache cleanup task (interval: {self.cleanup_interval}s)")
+            logger.debug(
+                f"Started TTL cache cleanup task (interval: {self.cleanup_interval}s)"
+            )
 
     async def stop(self) -> None:
         """Stop the cleanup task."""
@@ -82,7 +84,7 @@ class TTLCache(Generic[T]):
             now = datetime.utcnow()
             expired_keys = []
 
-            for key, (value, timestamp) in self.cache.items():
+            for key, (_value, timestamp) in self.cache.items():
                 if now - timestamp > self.ttl:
                     expired_keys.append(key)
 
@@ -327,10 +329,7 @@ class EmbeddingCache:
         return await self.cache.get(key)
 
     async def set(
-        self,
-        text: str,
-        embedding: list[float],
-        model: str | None = None
+        self, text: str, embedding: list[float], model: str | None = None
     ) -> None:
         """
         Cache an embedding.
@@ -344,9 +343,7 @@ class EmbeddingCache:
         await self.cache.set(key, embedding)
 
     async def get_batch(
-        self,
-        texts: list[str],
-        model: str | None = None
+        self, texts: list[str], model: str | None = None
     ) -> tuple[dict[int, list[float]], list[int]]:
         """
         Get multiple embeddings from cache.
@@ -435,12 +432,15 @@ class QueryResultCache:
         # Sort source filters for consistent keys
         sorted_filters = sorted(source_filters) if source_filters else []
 
+        # Normalize numeric and boolean inputs for stable keys
+        normalized_min_score = f"{min_score:.8g}"  # up to 8 significant digits
+        normalized_rerank = "1" if rerank else "0"
         key_parts = [
             query,
-            str(limit),
-            str(min_score),
+            str(int(limit)),
+            normalized_min_score,
             ",".join(sorted_filters),
-            str(rerank),
+            normalized_rerank,
         ]
 
         key_string = "|".join(key_parts)
@@ -497,18 +497,21 @@ def get_query_cache() -> QueryResultCache:
     return _query_cache
 
 
-async def initialize_caches() -> None:
+async def initialize_caches(ctx: Any | None = None) -> None:
     """Initialize all global caches."""
     embedding_cache = get_embedding_cache()
     query_cache = get_query_cache()
 
     await embedding_cache.start()
     await query_cache.start()
+    if ctx:
+        # client-facing progress
+        ctx.info("Caches initialized (embedding, query)")
 
     logger.info("Caches initialized with TTL and LRU eviction")
 
 
-async def close_caches() -> None:
+async def close_caches(ctx: Any | None = None) -> None:
     """Close all global caches."""
     global _embedding_cache, _query_cache
 
@@ -520,4 +523,6 @@ async def close_caches() -> None:
         await _query_cache.stop()
         _query_cache = None
 
+    if ctx:
+        ctx.info("Caches closed")
     logger.info("Caches closed")

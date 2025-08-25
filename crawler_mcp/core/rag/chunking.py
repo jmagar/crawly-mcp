@@ -67,22 +67,28 @@ class TokenCounter:
     """Accurate token counting with multiple tokenizer support."""
 
     # Class-level tokenizer caching to prevent repeated downloads
-    _tokenizer = None
-    _tokenizer_type = "word-estimate"
-    _tokenizer_lock = threading.Lock()
-    _tokenizer_initialized = False
+    _tokenizer: Any | None = None
+    _tokenizer_type: str = "word-estimate"
+    _tokenizer_lock: threading.Lock = threading.Lock()
+    _tokenizer_initialized: bool = False
 
     def __init__(self):
         # Use configurable word_to_token_ratio from settings with fallback
         try:
-            configured_ratio = getattr(settings, 'word_to_token_ratio', QWEN3_WORD_TO_TOKEN_RATIO)
+            configured_ratio = getattr(
+                settings, "word_to_token_ratio", QWEN3_WORD_TO_TOKEN_RATIO
+            )
             if isinstance(configured_ratio, (int, float)) and configured_ratio > 0:
                 self.word_to_token_ratio = configured_ratio
             else:
-                logger.warning(f"Invalid word_to_token_ratio {configured_ratio}, using default {QWEN3_WORD_TO_TOKEN_RATIO}")
+                logger.warning(
+                    f"Invalid word_to_token_ratio {configured_ratio}, using default {QWEN3_WORD_TO_TOKEN_RATIO}"
+                )
                 self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO
         except Exception as e:
-            logger.warning(f"Error loading word_to_token_ratio from settings: {e}, using default {QWEN3_WORD_TO_TOKEN_RATIO}")
+            logger.warning(
+                f"Error loading word_to_token_ratio from settings: {e}, using default {QWEN3_WORD_TO_TOKEN_RATIO}"
+            )
             self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO
 
         # Initialize tokenizer once at class level
@@ -117,9 +123,13 @@ class TokenCounter:
                 if model_revision:
                     tokenizer_kwargs["revision"] = model_revision
 
-                cls._tokenizer = AutoTokenizer.from_pretrained(model_name, **tokenizer_kwargs)
+                cls._tokenizer = AutoTokenizer.from_pretrained(
+                    model_name, **tokenizer_kwargs
+                )
                 cls._tokenizer_type = "qwen3"
-                logger.info(f"Initialized shared Qwen3 tokenizer from {model_name} (revision: {model_revision or 'main'})")
+                logger.info(
+                    f"Initialized shared Qwen3 tokenizer from {model_name} (revision: {model_revision or 'main'})"
+                )
             except ImportError:
                 logger.info(
                     "transformers not available (install with [ml] extra); using word-based estimation"
@@ -461,8 +471,17 @@ class TokenBasedChunker(ChunkingStrategy):
             total_words = len(word_positions)
             # Use configurable word-to-token ratio for accuracy
             approx_tokens_per_word = self.token_counter.word_to_token_ratio
-            chunk_size_words = int(self.chunk_size / approx_tokens_per_word)
-            overlap_words = int(self.overlap / approx_tokens_per_word)
+            # Ensure at least one word per chunk and valid overlap relation
+            chunk_size_words = max(
+                1, int(round(self.chunk_size / approx_tokens_per_word))
+            )
+            overlap_words = max(
+                0,
+                min(
+                    int(round(self.overlap / approx_tokens_per_word)),
+                    chunk_size_words - 1,
+                ),
+            )
 
             start_word = 0
             chunk_index = 0

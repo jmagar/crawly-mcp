@@ -350,23 +350,72 @@ class CrawlerrSettings(BaseSettings):
 
     crawl_excluded_selectors: list[str] = Field(
         default=[
+            # Copy buttons - comprehensive patterns
             ".copy-button",
             ".copy-code-button",
+            ".copy-btn",
+            ".btn-copy",
+            ".btn-clipboard",
             "button[title*='Copy']",
+            "button[aria-label*='Copy']",
+            "button[class*='copy']",
+            "button[data-copy]",
+            "[data-copy-button]",
+            ".clipboard-button",
+            # Tab navigation - all variants
+            ".tab-nav",
             ".tab-nav-item",
             ".tab-switcher",
+            ".tabs",
+            ".tab-buttons",
+            ".tab-container",
             ".package-manager-tabs",
+            ".code-tabs",
+            "[role='tablist']",
+            ".tab-list",
+            "[data-tabs]",
+            # Navigation elements
             ".breadcrumb",
             ".breadcrumbs",
-            ".social-share",
-            ".ad-banner",
+            ".nav-breadcrumb",
+            ".breadcrumb-nav",
             ".sidebar",
             ".navigation",
+            ".nav-menu",
+            ".menu-nav",
+            ".site-nav",
             ".toc-sidebar",
             ".doc-nav",
             ".header-nav",
             ".footer-nav",
             ".pagination-nav",
+            ".mobile-nav",
+            ".nav-toggle",
+            ".hamburger-menu",
+            # Documentation UI artifacts
+            ".social-share",
+            ".share-buttons",
+            ".ad-banner",
+            ".promo",
+            ".banner",
+            ".alert",
+            ".notification",
+            ".edit-page",
+            ".improve-page",
+            ".feedback",
+            ".edit-link",
+            ".improve-doc",
+            ".report-issue",
+            ".last-updated",
+            ".contributors",
+            ".page-metadata",
+            ".version-selector",
+            ".language-selector",
+            # Search and interactive elements
+            ".search-box",
+            ".filter-bar",
+            ".sort-options",
+            ".search-input",
         ],
         alias="CRAWL_EXCLUDED_SELECTORS",
         description="CSS selectors for UI elements to exclude from content extraction",
@@ -379,19 +428,19 @@ class CrawlerrSettings(BaseSettings):
     )
 
     crawl_pruning_threshold: float = Field(
-        default=0.5,
+        default=0.7,
         alias="CRAWL_PRUNING_THRESHOLD",
         ge=0.0,
         le=1.0,
-        description="Threshold for content relevance in PruningContentFilter (0.0-1.0)",
+        description="Threshold for content relevance in PruningContentFilter (0.7 = more aggressive filtering)",
     )
 
     crawl_min_word_threshold: int = Field(
-        default=20,
+        default=30,
         alias="CRAWL_MIN_WORD_THRESHOLD",
         ge=5,
         le=100,
-        description="Minimum words required for content blocks to be included",
+        description="Minimum words required for content blocks to be included (higher = less noise)",
     )
 
     crawl_prefer_fit_markdown: bool = Field(

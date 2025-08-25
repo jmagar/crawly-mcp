@@ -617,27 +617,48 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     "LXMLWebScrapingStrategy not available, using default"
                 )
 
-        # Base run config with fit markdown optimization
+        # Prepare CSS selector filtering parameters
+        # Content selector to focus on main content area
+        content_selector = (
+            request.content_selector
+            if request.content_selector is not None
+            else getattr(settings, "crawl_content_selector", None)
+        )
+
+        # Excluded selectors for UI noise removal (join them into a single string)
+        excluded_selectors = (
+            request.excluded_selectors
+            if request.excluded_selectors is not None
+            else getattr(settings, "crawl_excluded_selectors", [])
+        )
+        excluded_selector_string = (
+            ",".join(excluded_selectors) if excluded_selectors else None
+        )
+
+        # Base run config with fit markdown optimization and CSS filtering
         # NOTE: Deep crawl requires streaming mode (stream=True) to work properly
         # The BFS strategy expects an async generator, not a list
         stream_enabled = (
             deep_strategy is not None
         )  # Enable streaming only if deep crawl is used
-        run_config = CrawlerRunConfig(
-            deep_crawl_strategy=deep_strategy,
-            scraping_strategy=scraping_strategy,  # High-performance LXML strategy
-            stream=stream_enabled,  # Enable streaming when deep crawl is used
-            cache_mode=cache_mode,
-            page_timeout=page_timeout,
-            semaphore_count=getattr(
+        # Build configuration dictionary with conditional CSS selector parameters
+        config_params = {
+            "deep_crawl_strategy": deep_strategy,
+            "scraping_strategy": scraping_strategy,  # High-performance LXML strategy
+            "stream": stream_enabled,  # Enable streaming when deep crawl is used
+            "cache_mode": cache_mode,
+            "page_timeout": page_timeout,
+            "semaphore_count": getattr(
                 settings, "crawl_concurrency", 30
             ),  # Aggressive concurrency for i7-13700k
-            remove_overlay_elements=getattr(settings, "crawl_remove_overlays", True),
-            word_count_threshold=getattr(settings, "crawl_min_words", 50),
-            check_robots_txt=False,  # per user preference
-            verbose=False,  # Disable verbose output for MCP compatibility
+            "remove_overlay_elements": getattr(settings, "crawl_remove_overlays", True),
+            "word_count_threshold": max(
+                getattr(settings, "crawl_min_words", 50), min_word_threshold
+            ),
+            "check_robots_txt": False,  # per user preference
+            "verbose": False,  # Disable verbose output for MCP compatibility
             # Optimize for clean markdown extraction - use configurable tag exclusions
-            excluded_tags=(
+            "excluded_tags": (
                 request.excluded_tags
                 if request.excluded_tags is not None
                 else getattr(
@@ -646,38 +667,24 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     ["nav", "footer", "header", "aside", "script", "style"],
                 )
             ),
-            exclude_external_links=True,
-            markdown_generator=markdown_generator,  # Enable fit markdown generation
+            "exclude_external_links": True,
+            "markdown_generator": markdown_generator,  # Enable fit markdown generation
             # Force content processing for streaming
-            process_iframes=False,  # Disable for performance
-        )
+            "process_iframes": False,  # Disable for performance
+        }
 
-        # Add CSS selector filtering if available in Crawl4AI
-        # Note: These parameters may need to be added at extraction time depending on Crawl4AI version
-        try:
-            # Content selector to focus on main content area
-            content_selector = (
-                request.content_selector
-                if request.content_selector is not None
-                else getattr(settings, "crawl_content_selector", None)
-            )
-            if content_selector:
-                run_config.css_selector = content_selector  # type: ignore[attr-defined]
+        # Add CSS selector parameters if available
+        if content_selector:
+            config_params["css_selector"] = content_selector
+            self.logger.info(f"Using content selector: {content_selector}")
 
-            # Excluded selectors for UI noise removal
-            excluded_selectors = (
-                request.excluded_selectors
-                if request.excluded_selectors is not None
-                else getattr(settings, "crawl_excluded_selectors", [])
+        if excluded_selector_string:
+            config_params["excluded_selector"] = excluded_selector_string
+            self.logger.info(
+                f"Using excluded selectors: {excluded_selector_string[:100]}..."
             )
-            if excluded_selectors:
-                run_config.excluded_selector = ",".join(excluded_selectors)  # type: ignore[attr-defined]
 
-        except Exception as e:
-            self.logger.debug(
-                f"CSS selector configuration not supported in this Crawl4AI version: {e}"
-            )
-            # Continue without CSS selector filtering - tag filtering will still work
+        run_config = CrawlerRunConfig(**config_params)
 
         # Optional: memory thresholds to align with our MemoryManager
         if hasattr(settings, "crawl_memory_threshold_percent"):

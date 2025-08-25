@@ -107,13 +107,15 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         Execute optimized web crawling by delegating to the crawl4ai library.
         """
 
-        self.logger.info("WebCrawlStrategy.execute() started for URL: %s", request.url)
+        self.logger.info(
+            "WebCrawlStrategy.execute() started for URL: %s", request.url[0]
+        )
         await self._initialize_managers()
 
         start_time = time.time()
         self.logger.info(
             "Starting web crawl: %s (max_pages: %s, max_depth: %s)",
-            request.url,
+            request.url[0],
             request.max_pages,
             request.max_depth,
         )
@@ -177,7 +179,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
             # Sitemap preseeding: discover and parse sitemap URLs to bias deep crawling
             sitemap_seeds = await self._discover_sitemap_seeds(
-                request.url, request.max_pages or 100
+                request.url[0], request.max_pages or 100
             )
             self.logger.info(
                 "Discovered %s sitemap seeds: %s...",
@@ -227,7 +229,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     "Using BFSDeepCrawlStrategy approach with async iteration..."
                 )
                 successful_results, errors = await self._crawl_using_deep_strategy(
-                    browser, request.url, run_config, max_pages
+                    browser, request.url[0], run_config, max_pages
                 )
 
             # Process crawling results
@@ -287,7 +289,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             crawl_result = CrawlResult(
                 request_id=f"web_crawl_{int(time.time())}",
                 status=CrawlStatus.COMPLETED,
-                urls=[request.url] if isinstance(request.url, str) else request.url,
+                urls=request.url,  # Already converted to list by validator
                 pages=pages,
                 errors=errors,
                 statistics=statistics,
@@ -305,11 +307,10 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
         except Exception as e:
             self.logger.error("Web crawl failed: %s", e, exc_info=True)
-            urls = [request.url] if isinstance(request.url, str) else request.url
             return CrawlResult(
                 request_id=f"web_crawl_failed_{int(time.time())}",
                 status=CrawlStatus.FAILED,
-                urls=urls,
+                urls=request.url,  # Already converted to list by validator
                 pages=[],
                 errors=[str(e)],
                 statistics=CrawlStatistics(),

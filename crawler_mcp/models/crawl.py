@@ -93,8 +93,8 @@ class CrawlRequest(BaseModel):
         le=100,
         description="Minimum words required for content blocks",
     )
-    prefer_fit_markdown: bool = Field(
-        default=True, description="Prefer filtered fit_markdown over raw_markdown"
+    prefer_fit_markdown: bool | None = Field(
+        default=None, description="Prefer filtered fit_markdown over raw_markdown (None = use global setting)"
     )
 
     @field_validator("url")

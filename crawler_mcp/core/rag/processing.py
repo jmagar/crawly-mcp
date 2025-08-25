@@ -323,6 +323,8 @@ class ProcessingPipeline:
         deduplication: bool | None = None,
         force_update: bool = False,
         progress_callback: Callable[..., None] | None = None,
+        seed_url: str | None = None,
+        crawl_session_id: str | None = None,
     ) -> dict[str, int]:
         """
         Process a crawl result by chunking content and generating embeddings.
@@ -505,6 +507,16 @@ class ProcessingPipeline:
 
                     # Create document chunk
                     now = datetime.utcnow()
+                    # Determine discovery method based on URL relationship to seed
+                    discovery_method = "manual"  # Default fallback
+                    if seed_url:
+                        if page.url == seed_url:
+                            discovery_method = "seed"
+                        elif "sitemap" in page.metadata.get("source", "").lower():
+                            discovery_method = "sitemap"
+                        else:
+                            discovery_method = "link_following"
+
                     doc_chunk = DocumentChunk(
                         id=chunk_id,
                         content=chunk_data["text"],
@@ -522,6 +534,10 @@ class ProcessingPipeline:
                         },
                         content_hash=content_hash,
                         last_modified=now,
+                        # Crawl provenance tracking
+                        seed_url=seed_url,
+                        crawl_session_id=crawl_session_id,
+                        discovery_method=discovery_method,
                     )
                     document_chunks.append(doc_chunk)
                     total_chunks += 1

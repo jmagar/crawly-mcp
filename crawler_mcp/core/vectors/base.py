@@ -57,7 +57,7 @@ class BaseVectorService:
         """
         self.pool = get_pool()
         self._owned_client = client is None
-        
+
         if client is not None:
             self.client = client
         else:
@@ -83,7 +83,7 @@ class BaseVectorService:
             return self.client
         # Get from pool for operations
         return await self.pool.get_client()
-    
+
     async def _recreate_client(self) -> None:
         """Recreate the Qdrant client (compatibility method)."""
         logger.debug("Client recreation requested - using pool for new client")

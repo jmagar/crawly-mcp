@@ -2,7 +2,6 @@
 Service for generating embeddings using HF Text Embeddings Inference (TEI).
 """
 
-import asyncio
 import logging
 import time
 from typing import Any
@@ -12,7 +11,7 @@ from fastmcp.exceptions import ToolError
 
 from ..config import settings
 from ..models.rag import EmbeddingResult
-from .resilience import exponential_backoff, tei_circuit
+from .resilience import exponential_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -280,14 +279,14 @@ class EmbeddingService:
         # For optimal performance, use true batch API
         # Split into chunks if needed based on batch_size
         results = []
-        
+
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
             batch_results = await self.generate_embeddings_true_batch(
                 batch, normalize=normalize, truncate=truncate
             )
             results.extend(batch_results)
-        
+
         return results
 
     async def compute_similarity(

@@ -5,7 +5,6 @@ Advanced caching implementations with TTL and LRU eviction policies.
 import asyncio
 import hashlib
 import logging
-import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar
@@ -37,12 +36,12 @@ class TTLCache(Generic[T]):
         self.max_size = max_size
         self.ttl = timedelta(seconds=ttl_seconds)
         self.cleanup_interval = cleanup_interval
-        
+
         # Use OrderedDict for LRU behavior
         self.cache: OrderedDict[str, tuple[T, datetime]] = OrderedDict()
         self._lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task | None = None
-        
+
         # Statistics
         self.hits = 0
         self.misses = 0
@@ -82,15 +81,15 @@ class TTLCache(Generic[T]):
         async with self._lock:
             now = datetime.utcnow()
             expired_keys = []
-            
+
             for key, (value, timestamp) in self.cache.items():
                 if now - timestamp > self.ttl:
                     expired_keys.append(key)
-            
+
             for key in expired_keys:
                 del self.cache[key]
                 self.expirations += 1
-            
+
             if expired_keys:
                 logger.debug(f"Removed {len(expired_keys)} expired cache entries")
 
@@ -107,19 +106,19 @@ class TTLCache(Generic[T]):
         async with self._lock:
             if key in self.cache:
                 value, timestamp = self.cache[key]
-                
+
                 # Check if expired
                 if datetime.utcnow() - timestamp > self.ttl:
                     del self.cache[key]
                     self.expirations += 1
                     self.misses += 1
                     return None
-                
+
                 # Move to end (most recently used)
                 self.cache.move_to_end(key)
                 self.hits += 1
                 return value
-            
+
             self.misses += 1
             return None
 
@@ -137,7 +136,7 @@ class TTLCache(Generic[T]):
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
                 self.evictions += 1
-            
+
             # Add or update entry
             self.cache[key] = (value, datetime.utcnow())
             self.cache.move_to_end(key)
@@ -168,7 +167,7 @@ class TTLCache(Generic[T]):
         """Get cache statistics."""
         total_requests = self.hits + self.misses
         hit_rate = self.hits / total_requests if total_requests > 0 else 0
-        
+
         return {
             "size": len(self.cache),
             "max_size": self.max_size,
@@ -196,7 +195,7 @@ class LRUCache(Generic[T]):
         self.max_size = max_size
         self.cache: OrderedDict[str, T] = OrderedDict()
         self._lock = asyncio.Lock()
-        
+
         # Statistics
         self.hits = 0
         self.misses = 0
@@ -218,7 +217,7 @@ class LRUCache(Generic[T]):
                 self.cache.move_to_end(key)
                 self.hits += 1
                 return self.cache[key]
-            
+
             self.misses += 1
             return None
 
@@ -236,7 +235,7 @@ class LRUCache(Generic[T]):
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
                 self.evictions += 1
-            
+
             # Add or update entry
             self.cache[key] = value
             self.cache.move_to_end(key)
@@ -266,7 +265,7 @@ class LRUCache(Generic[T]):
         """Get cache statistics."""
         total_requests = self.hits + self.misses
         hit_rate = self.hits / total_requests if total_requests > 0 else 0
-        
+
         return {
             "size": len(self.cache),
             "max_size": self.max_size,
@@ -328,9 +327,9 @@ class EmbeddingCache:
         return await self.cache.get(key)
 
     async def set(
-        self, 
-        text: str, 
-        embedding: list[float], 
+        self,
+        text: str,
+        embedding: list[float],
         model: str | None = None
     ) -> None:
         """
@@ -345,8 +344,8 @@ class EmbeddingCache:
         await self.cache.set(key, embedding)
 
     async def get_batch(
-        self, 
-        texts: list[str], 
+        self,
+        texts: list[str],
         model: str | None = None
     ) -> tuple[dict[int, list[float]], list[int]]:
         """
@@ -361,14 +360,14 @@ class EmbeddingCache:
         """
         cached = {}
         misses = []
-        
+
         for i, text in enumerate(texts):
             embedding = await self.get(text, model)
             if embedding is not None:
                 cached[i] = embedding
             else:
                 misses.append(i)
-        
+
         return cached, misses
 
     async def set_batch(
@@ -435,7 +434,7 @@ class QueryResultCache:
         """Generate cache key from query parameters."""
         # Sort source filters for consistent keys
         sorted_filters = sorted(source_filters) if source_filters else []
-        
+
         key_parts = [
             query,
             str(limit),
@@ -443,7 +442,7 @@ class QueryResultCache:
             ",".join(sorted_filters),
             str(rerank),
         ]
-        
+
         key_string = "|".join(key_parts)
         return hashlib.sha256(key_string.encode()).hexdigest()
 
@@ -502,23 +501,23 @@ async def initialize_caches() -> None:
     """Initialize all global caches."""
     embedding_cache = get_embedding_cache()
     query_cache = get_query_cache()
-    
+
     await embedding_cache.start()
     await query_cache.start()
-    
+
     logger.info("Caches initialized with TTL and LRU eviction")
 
 
 async def close_caches() -> None:
     """Close all global caches."""
     global _embedding_cache, _query_cache
-    
+
     if _embedding_cache:
         await _embedding_cache.stop()
         _embedding_cache = None
-    
+
     if _query_cache:
         await _query_cache.stop()
         _query_cache = None
-    
+
     logger.info("Caches closed")

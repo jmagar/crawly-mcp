@@ -490,6 +490,8 @@ class RagService:
         deduplication: bool | None = None,
         force_update: bool = False,
         progress_callback: Callable[..., None] | None = None,
+        seed_url: str | None = None,
+        crawl_session_id: str | None = None,
     ) -> dict[str, int]:
         """
         Delegate to processing pipeline for crawl result processing.
@@ -499,12 +501,14 @@ class RagService:
             deduplication: Enable deduplication (uses settings default if None)
             force_update: Force update existing chunks
             progress_callback: Optional progress callback
+            seed_url: Original URL that initiated the crawl
+            crawl_session_id: Unique ID for this crawl session
 
         Returns:
             Processing statistics
         """
         return await self.processing_pipeline.process_crawl_result(
-            crawl_result, deduplication, force_update, progress_callback
+            crawl_result, deduplication, force_update, progress_callback, seed_url, crawl_session_id
         )
 
     async def query(self, query: RagQuery, rerank: bool = True) -> RagResult:

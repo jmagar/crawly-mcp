@@ -3,6 +3,7 @@ FastMCP tools for web crawling operations.
 """
 
 import logging
+import uuid
 from typing import Any
 
 from fastmcp import Context, FastMCP
@@ -59,6 +60,8 @@ async def _process_rag_if_requested(
     crawl_result: CrawlResult,
     source_type: SourceType,
     process_with_rag: bool,
+    seed_url: str,
+    crawl_session_id: str,
     deduplication: bool | None = None,
     force_update: bool = False,
 ) -> dict[str, Any]:
@@ -70,6 +73,8 @@ async def _process_rag_if_requested(
         crawl_result: Result from crawling operation
         source_type: Type of source for registration
         process_with_rag: Whether to process with RAG
+        seed_url: Original URL that initiated the crawl
+        crawl_session_id: Unique ID for this crawl session
         deduplication: Enable deduplication (defaults to settings)
         force_update: Force update all chunks even if unchanged
 
@@ -97,6 +102,8 @@ async def _process_rag_if_requested(
                     crawl_result,
                     deduplication=deduplication,
                     force_update=force_update,
+                    seed_url=seed_url,
+                    crawl_session_id=crawl_session_id,
                 )
                 rag_info["rag_processing"] = rag_stats
 
@@ -286,6 +293,10 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         """
         await ctx.info(f"Starting scrape of: {url}")
 
+        # Generate unique crawl session ID for provenance tracking
+        crawl_session_id = str(uuid.uuid4())
+        await ctx.info(f"Crawl session ID: {crawl_session_id}")
+
         # Create progress tracker
         progress_tracker = progress_middleware.create_tracker(f"scrape_{hash(url)}")
 
@@ -379,6 +390,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     crawl_result,
                     SourceType.WEBPAGE,
                     process_with_rag=True,
+                    seed_url=url,  # The scraped URL is the seed URL for single scraping
+                    crawl_session_id=crawl_session_id,
                     deduplication=deduplication,
                     force_update=force_update,
                 )
@@ -461,6 +474,10 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         crawl_type, type_params = _detect_crawl_type_and_params(target)
 
         await ctx.info(f"Detected {crawl_type} crawl for target: {target}")
+
+        # Generate unique crawl session ID for provenance tracking
+        crawl_session_id = str(uuid.uuid4())
+        await ctx.info(f"Crawl session ID: {crawl_session_id}")
 
         # Create progress tracker
         progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
@@ -673,6 +690,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     crawl_result,
                     source_type,
                     process_with_rag,
+                    seed_url=target,  # The target is the seed URL for the crawl
+                    crawl_session_id=crawl_session_id,
                     deduplication=deduplication,
                     force_update=force_update,
                 )

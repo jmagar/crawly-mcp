@@ -97,6 +97,10 @@ class DocumentOperations(BaseVectorService):
                             "word_count": doc.word_count,
                             "char_count": doc.char_count,
                             "timestamp": doc.timestamp.isoformat(),
+                            # Crawl provenance tracking
+                            "seed_url": doc.seed_url,
+                            "crawl_session_id": doc.crawl_session_id,
+                            "discovery_method": doc.discovery_method,
                             **doc.metadata,
                         },
                     )
@@ -175,6 +179,10 @@ class DocumentOperations(BaseVectorService):
                 word_count=payload.get("word_count", 0),
                 char_count=payload.get("char_count", 0),
                 timestamp=_parse_timestamp(payload.get("timestamp", "")),
+                # Crawl provenance tracking
+                seed_url=payload.get("seed_url"),
+                crawl_session_id=payload.get("crawl_session_id"),
+                discovery_method=payload.get("discovery_method"),
                 metadata={
                     k: v
                     for k, v in payload.items()
@@ -187,6 +195,9 @@ class DocumentOperations(BaseVectorService):
                         "word_count",
                         "char_count",
                         "timestamp",
+                        "seed_url",
+                        "crawl_session_id",
+                        "discovery_method",
                     ]
                 },
             )

@@ -3,6 +3,7 @@ Configuration management for Crawlerr using Pydantic Settings.
 """
 
 import logging
+import random
 from pathlib import Path
 from typing import Literal
 
@@ -71,9 +72,16 @@ class CrawlerrSettings(BaseSettings):
         default=128, alias="TEI_MAX_CONCURRENT_REQUESTS"
     )
     tei_max_batch_tokens: int = Field(default=32768, alias="TEI_MAX_BATCH_TOKENS")
+    tei_tokens_per_item: int = Field(
+        default=30,
+        alias="TEI_TOKENS_PER_ITEM",
+        ge=10,
+        le=100,
+        description="Estimated tokens per embedding item for batch size calculation",
+    )
     tei_batch_size: int = Field(
         default=256, alias="TEI_BATCH_SIZE"
-    )  # Increased for better throughput
+    )  # Will be validated against TEI_MAX_BATCH_TOKENS
     tei_timeout: float = Field(default=30.0, alias="TEI_TIMEOUT")
 
     # Embedding Configuration
@@ -322,12 +330,37 @@ class CrawlerrSettings(BaseSettings):
         description="Use LXMLWebScrapingStrategy for 20x faster parsing",
     )
 
-    # URL Pattern Exclusions - Disabled to restore original crawling behavior
+    # URL Pattern Exclusions - Conservative defaults to avoid admin/auth areas and binary files
     crawl_exclude_url_patterns: list[str] = Field(
         default=[
-            # Temporarily empty to allow maximum crawling
+            # Admin and authentication endpoints
+            r".*/admin.*",
+            r".*/login.*",
+            r".*/logout.*",
+            r".*/signup.*",
+            r".*/auth.*",
+            r".*/wp-admin.*",
+            r".*/dashboard.*",
+            r".*/account.*",
+            r".*/profile.*",
+            # Large binary file extensions
+            r".*\.zip$",
+            r".*\.exe$",
+            r".*\.bin$",
+            r".*\.pdf$",
+            r".*\.jpg$",
+            r".*\.jpeg$",
+            r".*\.png$",
+            r".*\.gif$",
+            r".*\.mp4$",
+            r".*\.mp3$",
+            r".*\.avi$",
+            r".*\.mkv$",
+            r".*\.iso$",
+            r".*\.dmg$",
         ],
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
+        description="URL patterns to exclude during crawling - includes admin/auth paths and binary files (override via env var for broader crawling)",
     )
 
     # Content Filtering Configuration - Clean Markdown Generation
@@ -348,8 +381,16 @@ class CrawlerrSettings(BaseSettings):
         description="HTML tags to exclude during content extraction for cleaner markdown",
     )
 
-    crawl_excluded_selectors: list[str] = Field(
-        default=[
+    crawl_strict_ui_filtering: bool = Field(
+        default=False,
+        alias="CRAWL_STRICT_UI_FILTERING",
+        description="When true, also exclude alerts/notifications and other aggressive UI elements that may contain documentation content",
+    )
+
+    @property
+    def crawl_excluded_selectors_list(self) -> list[str]:
+        """Get excluded selectors list based on strict filtering setting."""
+        base_selectors = [
             # Copy buttons - comprehensive patterns
             ".copy-button",
             ".copy-code-button",
@@ -392,14 +433,12 @@ class CrawlerrSettings(BaseSettings):
             ".mobile-nav",
             ".nav-toggle",
             ".hamburger-menu",
-            # Documentation UI artifacts
+            # Documentation UI artifacts (safe to always exclude)
             ".social-share",
             ".share-buttons",
             ".ad-banner",
             ".promo",
             ".banner",
-            ".alert",
-            ".notification",
             ".edit-page",
             ".improve-page",
             ".feedback",
@@ -416,15 +455,33 @@ class CrawlerrSettings(BaseSettings):
             ".filter-bar",
             ".sort-options",
             ".search-input",
-        ],
+        ]
+
+        # Add aggressive selectors only if strict filtering is enabled
+        if self.crawl_strict_ui_filtering:
+            base_selectors.extend([
+                ".alert",
+                ".notification",
+            ])
+
+        return base_selectors
+
+    crawl_excluded_selectors: list[str] = Field(
+        default_factory=list,  # Will be populated by property
         alias="CRAWL_EXCLUDED_SELECTORS",
-        description="CSS selectors for UI elements to exclude from content extraction",
+        description="CSS selectors for UI elements to exclude from content extraction (use crawl_strict_ui_filtering for alerts/notifications)",
     )
 
     crawl_content_selector: str | None = Field(
         default=None,
         alias="CRAWL_CONTENT_SELECTOR",
-        description="CSS selector to focus on main content area (None = auto-detect using semantic HTML5)",
+        description="CSS selector to focus on main content area (None = no CSS filtering; crawler should not auto-inject)",
+    )
+
+    crawl_use_semantic_default_selector: bool = Field(
+        default=False,
+        alias="CRAWL_USE_SEMANTIC_DEFAULT_SELECTOR",
+        description="When true and content_selector is None, automatically apply semantic HTML5 selectors (main, article, [role=main])",
     )
 
     crawl_pruning_threshold: float = Field(
@@ -447,6 +504,12 @@ class CrawlerrSettings(BaseSettings):
         default=True,
         alias="CRAWL_PREFER_FIT_MARKDOWN",
         description="Prefer fit_markdown over raw_markdown for cleaner content",
+    )
+
+    clean_ui_artifacts: bool = Field(
+        default=True,
+        alias="CLEAN_UI_ARTIFACTS",
+        description="Enable post-processing regex cleanup of UI artifacts like Copy buttons and tab navigation",
     )
 
     # Deduplication Configuration
@@ -542,6 +605,16 @@ class CrawlerrSettings(BaseSettings):
     max_request_size: int = Field(default=10485760, alias="MAX_REQUEST_SIZE")  # 10MB
     request_timeout: float = Field(default=30.0, alias="REQUEST_TIMEOUT")
 
+    def compute_retry_backoff(self, attempts: int) -> float:
+        """Compute exponential backoff delay with jitter."""
+        base_delay = min(
+            self.retry_max_delay,
+            self.retry_initial_delay * (self.retry_exponential_base ** attempts),
+        )
+        # Apply jitter (±20%)
+        jittered_delay = base_delay * random.uniform(0.8, 1.2)
+        return max(self.retry_initial_delay, min(self.retry_max_delay, jittered_delay))
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Convert cors_origins string to list."""
@@ -575,6 +648,26 @@ class CrawlerrSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_tei_batch_size(self) -> "CrawlerrSettings":
+        """Validate TEI batch size against token limits."""
+        estimated_tokens = self.tei_batch_size * self.tei_tokens_per_item
+        if estimated_tokens > self.tei_max_batch_tokens:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            derived_batch_size = max(1, self.tei_max_batch_tokens // self.tei_tokens_per_item)
+            logger.warning(
+                "TEI batch size %s * %s tokens/item = %s exceeds TEI_MAX_BATCH_TOKENS %s. "
+                "Consider reducing to %s for optimal performance.",
+                self.tei_batch_size,
+                self.tei_tokens_per_item,
+                estimated_tokens,
+                self.tei_max_batch_tokens,
+                derived_batch_size,
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_deduplication(self) -> "CrawlerrSettings":
         """Validate deduplication configuration."""
         valid_strategies = {"content_hash", "timestamp", "none"}
@@ -593,6 +686,13 @@ class CrawlerrSettings(BaseSettings):
                 "Orphan detection requires deduplication to be enabled."
             )
 
+        return self
+
+    @model_validator(mode="after")
+    def _populate_excluded_selectors(self) -> "CrawlerrSettings":
+        """Populate crawl_excluded_selectors from property if it's empty."""
+        if not self.crawl_excluded_selectors:
+            self.crawl_excluded_selectors = self.crawl_excluded_selectors_list
         return self
 
     model_config = SettingsConfigDict(

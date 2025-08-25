@@ -73,7 +73,17 @@ class TokenCounter:
     _tokenizer_initialized = False
 
     def __init__(self):
-        self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO  # Use Qwen3's ratio (1.4)
+        # Use configurable word_to_token_ratio from settings with fallback
+        try:
+            configured_ratio = getattr(settings, 'word_to_token_ratio', QWEN3_WORD_TO_TOKEN_RATIO)
+            if isinstance(configured_ratio, (int, float)) and configured_ratio > 0:
+                self.word_to_token_ratio = configured_ratio
+            else:
+                logger.warning(f"Invalid word_to_token_ratio {configured_ratio}, using default {QWEN3_WORD_TO_TOKEN_RATIO}")
+                self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO
+        except Exception as e:
+            logger.warning(f"Error loading word_to_token_ratio from settings: {e}, using default {QWEN3_WORD_TO_TOKEN_RATIO}")
+            self.word_to_token_ratio = QWEN3_WORD_TO_TOKEN_RATIO
 
         # Initialize tokenizer once at class level
         self._ensure_tokenizer_initialized()
@@ -98,9 +108,18 @@ class TokenCounter:
 
                 # Use the same model as your embedding service
                 model_name = getattr(settings, "tei_model", "Qwen/Qwen3-Embedding-0.6B")
-                cls._tokenizer = AutoTokenizer.from_pretrained(model_name)
+                model_revision = getattr(settings, "tei_model_revision", None)
+
+                tokenizer_kwargs = {
+                    "local_files_only": True,
+                    "trust_remote_code": False,
+                }
+                if model_revision:
+                    tokenizer_kwargs["revision"] = model_revision
+
+                cls._tokenizer = AutoTokenizer.from_pretrained(model_name, **tokenizer_kwargs)
                 cls._tokenizer_type = "qwen3"
-                logger.info(f"Initialized shared Qwen3 tokenizer from {model_name}")
+                logger.info(f"Initialized shared Qwen3 tokenizer from {model_name} (revision: {model_revision or 'main'})")
             except ImportError:
                 logger.info(
                     "transformers not available (install with [ml] extra); using word-based estimation"

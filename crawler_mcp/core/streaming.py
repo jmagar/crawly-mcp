@@ -34,7 +34,7 @@ class ChunkStream:
         """
         self.batch_size = batch_size or settings.default_batch_size
         self.max_buffer_size = max_buffer_size
-        
+
         # Queues for streaming
         self.input_queue: asyncio.Queue[DocumentChunk | None] = asyncio.Queue(
             maxsize=max_buffer_size
@@ -42,11 +42,11 @@ class ChunkStream:
         self.output_queue: asyncio.Queue[DocumentChunk | None] = asyncio.Queue(
             maxsize=max_buffer_size
         )
-        
+
         # Statistics
         self.total_processed = 0
         self.total_errors = 0
-        
+
         # Control
         self._processing = False
         self._processor_task: asyncio.Task | None = None
@@ -63,7 +63,7 @@ class ChunkStream:
         """
         if self._processing:
             return
-        
+
         self._processing = True
         self._processor_task = asyncio.create_task(
             self._process_batches(processor)
@@ -76,7 +76,7 @@ class ChunkStream:
     ) -> None:
         """Process chunks in batches."""
         batch: list[DocumentChunk] = []
-        
+
         while self._processing:
             try:
                 # Get chunk with timeout to allow periodic batch processing
@@ -84,27 +84,27 @@ class ChunkStream:
                     self.input_queue.get(),
                     timeout=1.0
                 )
-                
+
                 if chunk is None:
                     # Sentinel value - process remaining batch and stop
                     if batch:
                         await self._process_batch(batch, processor)
                     await self.output_queue.put(None)
                     break
-                
+
                 batch.append(chunk)
-                
+
                 # Process batch when full
                 if len(batch) >= self.batch_size:
                     await self._process_batch(batch, processor)
                     batch = []
-                    
+
             except asyncio.TimeoutError:
                 # Timeout - process partial batch if exists
                 if batch:
                     await self._process_batch(batch, processor)
                     batch = []
-                    
+
             except Exception as e:
                 logger.error(f"Error in stream processing: {e}")
                 self.total_errors += 1
@@ -120,13 +120,13 @@ class ChunkStream:
             async for processed_chunk in processor(batch):
                 await self.output_queue.put(processed_chunk)
                 self.total_processed += 1
-                
+
             logger.debug(f"Processed batch of {len(batch)} chunks")
-            
+
         except Exception as e:
             logger.error(f"Error processing batch: {e}")
             self.total_errors += 1
-            
+
             # Put unprocessed chunks back for retry
             for chunk in batch:
                 chunk.metadata["processing_error"] = str(e)
@@ -172,19 +172,19 @@ class ChunkStream:
             List of all processed chunks
         """
         results = []
-        
+
         while True:
             chunk = await self.get_processed()
             if chunk is None:
                 break
             results.append(chunk)
-        
+
         return results
 
     async def stop(self) -> None:
         """Stop processing."""
         self._processing = False
-        
+
         if self._processor_task:
             self._processor_task.cancel()
             try:
@@ -234,15 +234,15 @@ class AsyncBatchIterator:
             # List-based iteration
             if self._index >= len(self.items):
                 raise StopAsyncIteration
-            
+
             batch = self.items[self._index : self._index + self.batch_size]
             self._index += self.batch_size
             return batch
-            
+
         else:
             # Async iterator-based iteration
             batch = []
-            
+
             try:
                 for _ in range(self.batch_size):
                     item = await self.items.__anext__()
@@ -250,7 +250,7 @@ class AsyncBatchIterator:
             except StopAsyncIteration:
                 if not batch:
                     raise
-            
+
             return batch
 
 
@@ -277,7 +277,7 @@ async def stream_process_chunks(
     batch_size = batch_size or settings.default_batch_size
     total_processed = 0
     total_errors = 0
-    
+
     # Create batch iterator
     if isinstance(chunks, list):
         total_chunks = len(chunks)
@@ -285,43 +285,43 @@ async def stream_process_chunks(
     else:
         total_chunks = None  # Unknown for iterators
         batch_iterator = AsyncBatchIterator(chunks, batch_size)
-    
+
     # Process batches
     batch_num = 0
     async for batch in batch_iterator:
         batch_num += 1
-        
+
         try:
             # Extract texts for embedding
             texts = [chunk.content for chunk in batch]
-            
+
             # Generate embeddings
             embeddings = await embed_func(texts)
-            
+
             # Attach embeddings to chunks
             for chunk, embedding in zip(batch, embeddings, strict=False):
                 chunk.embedding = embedding
-            
+
             # Store chunks
             stored = await store_func(batch)
             total_processed += stored
-            
+
             # Report progress
             if progress_callback and total_chunks:
                 progress_callback(total_processed, total_chunks)
-            
+
             logger.debug(
                 f"Processed batch {batch_num} ({len(batch)} chunks, {stored} stored)"
             )
-            
+
         except Exception as e:
             logger.error(f"Error processing batch {batch_num}: {e}")
             total_errors += len(batch)
-    
+
     logger.info(
         f"Stream processing complete: {total_processed} processed, {total_errors} errors"
     )
-    
+
     return total_processed, total_errors
 
 
@@ -342,7 +342,7 @@ async def parallel_stream_process(
         Processed chunks
     """
     semaphore = asyncio.Semaphore(max_workers)
-    
+
     async def process_chunk(chunk: DocumentChunk) -> DocumentChunk:
         """Process single chunk through all processors."""
         async with semaphore:
@@ -353,11 +353,11 @@ async def parallel_stream_process(
                 else:
                     result = processor(result)
             return result
-    
+
     # Process all chunks in parallel
     tasks = [process_chunk(chunk) for chunk in chunks]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # Filter out errors
     processed = []
     for result in results:
@@ -365,5 +365,5 @@ async def parallel_stream_process(
             logger.error(f"Chunk processing error: {result}")
         else:
             processed.append(result)
-    
+
     return processed

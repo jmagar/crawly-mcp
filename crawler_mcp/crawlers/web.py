@@ -108,15 +108,13 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         Execute optimized web crawling by delegating to the crawl4ai library.
         """
 
-        self.logger.info(
-            "WebCrawlStrategy.execute() started for URL: %s", request.url[0]
-        )
+        self.logger.info("WebCrawlStrategy.execute() started for URLs: %s", request.url)
         await self._initialize_managers()
 
         start_time = time.time()
         self.logger.info(
             "Starting web crawl: %s (max_pages: %s, max_depth: %s)",
-            request.url[0],
+            request.url,
             request.max_pages,
             request.max_depth,
         )
@@ -179,9 +177,15 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 await browser.start()
 
             # Sitemap preseeding: discover and parse sitemap URLs to bias deep crawling
-            sitemap_seeds = await self._discover_sitemap_seeds(
-                request.url[0], request.max_pages or 100
-            )
+            # Discover seeds from all provided URLs (same-domain)
+            sitemap_seeds: list[str] = []
+            for u in request.url:
+                sitemap_seeds.extend(
+                    await self._discover_sitemap_seeds(u, request.max_pages or 100)
+                )
+            # Deduplicate while preserving order
+            seen = set()
+            sitemap_seeds = [s for s in sitemap_seeds if not (s in seen or seen.add(s))]
             self.logger.info(
                 "Discovered %s sitemap seeds: %s...",
                 len(sitemap_seeds),
@@ -229,16 +233,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 self.logger.info(
                     "Using BFSDeepCrawlStrategy approach with async iteration..."
                 )
+                # Use the first URL as the starting point but keep others for discovery via seeds
+                start_url = request.url[0]
                 successful_results, errors = await self._crawl_using_deep_strategy(
-                    browser, request.url[0], run_config, max_pages
+                    browser, start_url, run_config, max_pages
                 )
 
             # Process crawling results
             pages = []
 
             # Process results outside suppress_stdout context for debugging
-            # Always prefer fit_markdown for cleaner content (filtered by PruningContentFilter)
-            prefer_fit_markdown = getattr(request, "prefer_fit_markdown", True)
+            # Prefer fit_markdown for cleaner content, respecting global setting when request doesn't specify
+            prefer_fit_markdown = (
+                request.prefer_fit_markdown
+                if getattr(request, "prefer_fit_markdown", None) is not None
+                else getattr(settings, "crawl_prefer_fit_markdown", True)
+            )
             for result in successful_results:
                 self.logger.info("Processing successful result for %s", result.url)
                 page_content = self._to_page_content(result, prefer_fit_markdown)
@@ -425,10 +435,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         try:
             # Check if result.markdown is an integer (hash ID issue)
             if isinstance(result.markdown, int):
-                print(
-                    f"CRAWL DEBUG - result.markdown is integer {result.markdown}, returning empty",
-                    file=sys.stderr,
-                    flush=True,
+                self.logger.debug(
+                    "CRAWL DEBUG - result.markdown is integer %s, returning empty",
+                    result.markdown,
                 )
                 return ""
 
@@ -482,10 +491,8 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             return ""
 
         except (AttributeError, TypeError) as e:
-            print(
-                f"CRAWL DEBUG - Exception accessing markdown attributes: {e}",
-                file=sys.stderr,
-                flush=True,
+            self.logger.debug(
+                "CRAWL DEBUG - Exception accessing markdown attributes: %s", e
             )
             return ""
         except Exception as e:
@@ -497,17 +504,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         if not content.strip():
             return content
 
-        # Remove isolated "Copy" text from code blocks
-        content = re.sub(r"\bCopy\b(?!\s+\w)", "", content)
+        # Only apply cleanup if enabled in settings
+        if not getattr(settings, "clean_ui_artifacts", True):
+            return content
 
-        # Remove package manager tab patterns (npm/yarn/pnpm/bun)
+        # Remove isolated "Copy" text - anchor to full lines or common button wrappers
+        content = re.sub(r"^\s*Copy\s*$", "", content, flags=re.MULTILINE)
+        content = re.sub(r"\[Copy\]|\(Copy\)|Copy\s*button", "", content, flags=re.IGNORECASE)
+
+        # Remove package manager tabs - only full lines that consist solely of package manager tokens
         content = re.sub(
-            r"(?:npm|yarn|pnpm|bun)(?:\s+(?:npm|yarn|pnpm|bun))+", "", content
+            r"^\s*(?:npm|yarn|pnpm|bun)(?:\s+(?:npm|yarn|pnpm|bun))*\s*$", "", content, flags=re.MULTILINE
         )
 
-        # Remove repeated navigation patterns
+        # Remove repeated navigation patterns - full-line repeated nav breadcrumbs
         content = re.sub(
-            r"(\b(?:Home|Docs|API|Guide|Tutorial|Examples)\b\s*){3,}", "", content
+            r"^(\s*(?:Home|Docs|API|Guide|Tutorial|Examples)\s*[>|/|\-]\s*){2,}.*$", "", content, flags=re.MULTILINE
         )
 
         # Remove lines that are only UI commands or single words
@@ -537,7 +549,6 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         self, result: Crawl4aiResult, prefer_fit_markdown: bool = True
     ) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
-        import sys
 
         # STREAMING CRAWL FIX: During streaming, Crawl4AI returns lazy-loaded objects with hash placeholders
         # Sanitize the result first to prevent integer hash issues
@@ -558,7 +569,10 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             f"content_length={len(best_content)}, "
             f"word_count={word_count}"
         )
-        print(debug_msg, file=sys.stderr, flush=True)
+        self.logger.debug(debug_msg)
+        if hasattr(self, "ctx") and getattr(self, "ctx", None):
+            with contextlib.suppress(Exception):
+                self.ctx.info(f"Processed content for {getattr(result, 'url', 'unknown')}")
 
         return PageContent(
             url=result.url,
@@ -671,9 +685,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else getattr(settings, "crawl_content_selector", None)
         )
 
-        # If no content selector specified, use semantic HTML5 selectors
+        # If no content selector specified, optionally use semantic HTML5 selectors
         # This avoids site-specific selectors while targeting main content
-        if content_selector is None:
+        if content_selector is None and getattr(settings, "crawl_use_semantic_default_selector", False):
             content_selector = (
                 "main, article, .content, [role='main'], .docs-content, .markdown-body"
             )
@@ -729,18 +743,24 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             "process_iframes": False,  # Disable for performance
         }
 
-        # Add CSS selector parameters if available
-        if content_selector:
-            config_params["css_selector"] = content_selector
-            self.logger.info(f"Using content selector: {content_selector}")
+        # Add CSS selector parameters if available, using dictionary comprehension
+        optional_params = {
+            "css_selector": content_selector,
+            "excluded_selector": excluded_selector_string,
+        }
+        filtered = {k: v for k, v in optional_params.items() if v}
+        config_params.update(filtered)
+        for k, v in filtered.items():
+            msg = "content selector" if k == "css_selector" else "excluded selectors"
+            self.logger.info("Using %s: %s", msg, str(v)[:100])
 
-        if excluded_selector_string:
-            config_params["excluded_selector"] = excluded_selector_string
-            self.logger.info(
-                f"Using excluded selectors: {excluded_selector_string[:100]}..."
-            )
-
-        run_config = CrawlerRunConfig(**config_params)
+        try:
+            run_config = CrawlerRunConfig(**config_params)
+        except TypeError as e:
+            self.logger.warning("Retrying run config without optional CSS params: %s", e)
+            for key in ("css_selector", "excluded_selector", "scraping_strategy"):
+                config_params.pop(key, None)
+            run_config = CrawlerRunConfig(**config_params)
 
         # Optional: memory thresholds to align with our MemoryManager
         if hasattr(settings, "crawl_memory_threshold_percent"):
@@ -885,9 +905,14 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 ]
             )
             self.logger.info("Using keywords for scoring: %s...", keywords[:10])
-            KeywordRelevanceScorer(keywords=keywords, weight=0.7)  # type: ignore[attr-defined]
+            # If supported by your crawl4ai version:
+            try:
+                deep_kwargs = {"scorer": KeywordRelevanceScorer(keywords=keywords, weight=0.7)}
+            except Exception:
+                deep_kwargs = {}
         except Exception as e:
             self.logger.warning("Failed to create scorer: %s", e)
+            deep_kwargs = {}
 
         # Use simple BFS strategy with comprehensive filtering
         try:
@@ -897,15 +922,25 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 max_pages,
                 "present" if filter_chain else "None",
             )
-            # BFS strategy with minimal filtering for maximum crawling capability
-            # Omit filter_chain to allow crawl4ai to discover all possible URLs
-            return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
-                max_depth=max_depth,
-                include_external=False,
-                max_pages=max_pages,
-                # Intentionally omit filter_chain - it defaults to empty FilterChain() which allows all URLs
-                # This ensures maximum crawling capability for documentation sites
-            )
+            # Apply user-provided include/exclude patterns when present
+            try:
+                return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
+                    max_depth=max_depth,
+                    include_external=False,
+                    max_pages=max_pages,
+                    filter_chain=filter_chain if filter_chain is not None else None,
+                    **(deep_kwargs if "deep_kwargs" in locals() else {}),
+                )
+            except TypeError:
+                strat = BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
+                    max_depth=max_depth,
+                    include_external=False,
+                    max_pages=max_pages,
+                )
+                with contextlib.suppress(Exception):
+                    if filter_chain is not None:
+                        strat.filter_chain = filter_chain
+                return strat
         except Exception as e:
             self.logger.warning("Failed to create BFS strategy: %s", e)
             # Last resort: minimal BFS parameters

@@ -48,8 +48,11 @@ class CrawlerrSettings(BaseSettings):
     )
     # Unified batch configuration for optimal performance
     default_batch_size: int = Field(
-        default=256, alias="DEFAULT_BATCH_SIZE", ge=64, le=512,
-        description="Default batch size for all operations"
+        default=256,
+        alias="DEFAULT_BATCH_SIZE",
+        ge=64,
+        le=512,
+        description="Default batch size for all operations",
     )
     qdrant_batch_size: int = Field(
         default=256, alias="QDRANT_BATCH_SIZE", ge=64, le=512
@@ -68,7 +71,9 @@ class CrawlerrSettings(BaseSettings):
         default=128, alias="TEI_MAX_CONCURRENT_REQUESTS"
     )
     tei_max_batch_tokens: int = Field(default=32768, alias="TEI_MAX_BATCH_TOKENS")
-    tei_batch_size: int = Field(default=256, alias="TEI_BATCH_SIZE")  # Increased for better throughput
+    tei_batch_size: int = Field(
+        default=256, alias="TEI_BATCH_SIZE"
+    )  # Increased for better throughput
     tei_timeout: float = Field(default=30.0, alias="TEI_TIMEOUT")
 
     # Embedding Configuration
@@ -76,19 +81,28 @@ class CrawlerrSettings(BaseSettings):
     embedding_dimension: int = Field(default=1024, alias="EMBEDDING_DIMENSION")
     embedding_normalize: bool = Field(default=True, alias="EMBEDDING_NORMALIZE")
     embedding_max_retries: int = Field(default=3, alias="EMBEDDING_MAX_RETRIES")
-    
+
     # Retry configuration with exponential backoff
     retry_initial_delay: float = Field(
-        default=1.0, alias="RETRY_INITIAL_DELAY", ge=0.1, le=10.0,
-        description="Initial delay in seconds for exponential backoff"
+        default=1.0,
+        alias="RETRY_INITIAL_DELAY",
+        ge=0.1,
+        le=10.0,
+        description="Initial delay in seconds for exponential backoff",
     )
     retry_max_delay: float = Field(
-        default=60.0, alias="RETRY_MAX_DELAY", ge=1.0, le=300.0,
-        description="Maximum delay in seconds for exponential backoff"
+        default=60.0,
+        alias="RETRY_MAX_DELAY",
+        ge=1.0,
+        le=300.0,
+        description="Maximum delay in seconds for exponential backoff",
     )
     retry_exponential_base: float = Field(
-        default=2.0, alias="RETRY_EXPONENTIAL_BASE", ge=1.1, le=5.0,
-        description="Base for exponential backoff calculation"
+        default=2.0,
+        alias="RETRY_EXPONENTIAL_BASE",
+        ge=1.1,
+        le=5.0,
+        description="Base for exponential backoff calculation",
     )
     embedding_workers: int = Field(default=4, alias="EMBEDDING_WORKERS", ge=1, le=16)
 
@@ -308,16 +322,89 @@ class CrawlerrSettings(BaseSettings):
         description="Use LXMLWebScrapingStrategy for 20x faster parsing",
     )
 
-    # URL Pattern Exclusions - Following Crawl4AI best practices (minimal)
+    # URL Pattern Exclusions - Comprehensive filtering to avoid non-HTML content
     crawl_exclude_url_patterns: list[str] = Field(
         default=[
-            # Only essential exclusions like Crawl4AI examples
+            # Authentication/Admin pages
             "*login.php*",
             "*admin.php*",
-            "*.exe",
+            "*login*",
+            "*admin*",
+            # Archives & Downloads
             "*.zip",
+            "*.tar",
+            "*.gz",
+            "*.rar",
+            "*.7z",
+            # Documents
             "*.pdf",
+            "*.doc",
+            "*.docx",
+            "*.xls",
+            "*.xlsx",
+            "*.ppt",
+            "*.pptx",
+            # Images (comprehensive)
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.gif",
+            "*.svg",
+            "*.webp",
+            "*.ico",
+            "*.bmp",
+            "*.tiff",
+            # Media files
+            "*.mp3",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.wmv",
+            "*.flv",
+            "*.wav",
+            "*.m4v",
+            # Executables & Installers
+            "*.exe",
+            "*.msi",
+            "*.app",
+            "*.deb",
+            "*.rpm",
+            "*.dmg",
+            # Web fonts
+            "*.woff",
+            "*.woff2",
+            "*.ttf",
+            "*.eot",
+            "*.otf",
+            # Data/Config files
+            "*.json",
+            "*.xml",
+            "*.csv",
+            "*.sql",
+            "*.yaml",
+            "*.yml",
+            # Stylesheets and scripts (usually not content)
+            "*.css",
+            "*.js",
+            "*.min.js",
+            "*.min.css",
+            # Version control
             "*/.git/*",
+            "*/.svn/*",
+            "*/.hg/*",
+            # Common non-content patterns
+            "*/api/*",
+            "*/static/*",
+            "*/assets/*",
+            "*/_next/static/*",  # Next.js static assets
+            # External domains that should be avoided
+            "*github.com/*",  # GitHub profiles/repos
+            "*twitter.com/*",  # Social media
+            "*x.com/*",
+            "*linkedin.com/*",
+            "*facebook.com/*",
+            "*youtube.com/*",  # Video platforms
+            "*vimeo.com/*",
         ],
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
     )

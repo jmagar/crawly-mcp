@@ -67,6 +67,104 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         super().__init__()
         self.memory_manager = None
 
+        # Pre-compile URL exclusion patterns for fast validation
+        self._excluded_extensions = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".bmp",
+            ".tiff",
+            ".mp3",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".flv",
+            ".wav",
+            ".m4v",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".rar",
+            ".7z",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".exe",
+            ".msi",
+            ".app",
+            ".deb",
+            ".rpm",
+            ".dmg",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".eot",
+            ".otf",
+            ".css",
+            ".js",
+            ".json",
+            ".xml",
+            ".csv",
+            ".sql",
+            ".yaml",
+            ".yml",
+        }
+
+        self._excluded_paths = {
+            "/static/",
+            "/assets/",
+            "/_next/static/",
+            "/api/",
+            "/.git/",
+            "/.svn/",
+            "/.hg/",
+        }
+
+        self._excluded_domains = {
+            "github.com",
+            "twitter.com",
+            "x.com",
+            "linkedin.com",
+            "facebook.com",
+            "youtube.com",
+            "vimeo.com",
+        }
+
+    def _should_skip_url(self, url: str) -> bool:
+        """Fast pre-crawl URL validation to skip non-HTML content."""
+        try:
+            parsed = urlparse(url.lower())
+
+            # Check domain exclusions
+            if parsed.netloc in self._excluded_domains:
+                return True
+
+            # Check path exclusions
+            if any(excluded in parsed.path for excluded in self._excluded_paths):
+                return True
+
+            # Check file extension exclusions
+            path = parsed.path
+            if "." in path:
+                ext = os.path.splitext(path)[1].lower()
+                if ext in self._excluded_extensions:
+                    return True
+
+            # Skip obvious non-content URLs
+            return any(pattern in url.lower() for pattern in ["login", "admin", "auth"])
+        except Exception:
+            # If URL parsing fails, err on the side of caution and skip
+            return True
+
     async def _initialize_managers(self) -> None:
         """Initialize required managers."""
         if not self.memory_manager:
@@ -110,6 +208,41 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         self.logger.info("WebCrawlStrategy.execute() started for URL: %s", request.url)
         await self._initialize_managers()
 
+        # Pre-validate URL to avoid crawling inappropriate content
+        first_url = request.url[0] if isinstance(request.url, list) else request.url
+        if self._should_skip_url(first_url):
+            self.logger.warning("Skipping URL due to exclusion patterns: %s", first_url)
+            return CrawlResult(
+                url=first_url,
+                status="skipped",
+                message=f"URL excluded by filtering patterns: {first_url}",
+                pages_crawled=0,
+                success_rate=0.0,
+                statistics={
+                    "total_pages_crawled": 0,
+                    "total_pages_failed": 1,
+                    "unique_domains": 0,
+                    "total_links_discovered": 0,
+                    "total_bytes_downloaded": 0,
+                    "crawl_duration_seconds": 0.0,
+                    "pages_per_second": 0.0,
+                    "average_page_size": 0.0,
+                },
+                rag_processing={
+                    "documents_processed": 0,
+                    "chunks_created": 0,
+                    "embeddings_generated": 0,
+                    "chunks_stored": 0,
+                    "chunks_skipped": 0,
+                    "chunks_updated": 0,
+                    "chunks_deleted": 0,
+                },
+                sources_registered=0,
+                errors=[f"URL excluded by filtering patterns: {first_url}"],
+                sample_pages=[],
+                advanced_features={},
+            )
+
         start_time = time.time()
         self.logger.info(
             "Starting web crawl: %s (max_pages: %s, max_depth: %s)",
@@ -127,8 +260,6 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 self.logger.warning(
                     "System may have insufficient memory for crawl, proceeding with caution"
                 )
-
-            first_url = request.url[0] if isinstance(request.url, list) else request.url
 
             # High-performance browser config optimized for i7-13700k + RTX 4070
             browser_config = BrowserConfig(
@@ -759,15 +890,24 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 max_pages,
                 "present" if filter_chain else "None",
             )
-            # Minimal BFS strategy configuration for maximum crawling
-            # Omit filter_chain entirely (don't set to None) as per crawl4ai docs
-            return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
-                max_depth=max_depth,
-                include_external=False,
-                max_pages=max_pages,
-                # Omit filter_chain - it defaults to empty FilterChain() which allows all URLs
-                # Omit score_threshold - it defaults to -infinity which allows all URLs
-            )
+            # BFS strategy with URL filtering to avoid non-HTML content
+            strategy_params = {
+                "max_depth": max_depth,
+                "include_external": False,
+                "max_pages": max_pages,
+            }
+
+            # Include filter_chain if available to filter out unwanted URLs
+            if filter_chain:
+                strategy_params["filter_chain"] = filter_chain
+                self.logger.info(
+                    "Applied URL filtering chain with %d filters",
+                    len(filter_chain.filters)
+                    if hasattr(filter_chain, "filters")
+                    else 0,
+                )
+
+            return BFSDeepCrawlStrategy(**strategy_params)  # type: ignore[attr-defined]
         except Exception as e:
             self.logger.warning("Failed to create BFS strategy: %s", e)
             # Last resort: minimal BFS parameters

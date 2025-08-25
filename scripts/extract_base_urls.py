@@ -18,8 +18,8 @@ from urllib.parse import urlparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from crawler_mcp.config import get_settings
-from crawler_mcp.core.vectors.statistics import StatisticsCollector
+from crawler_mcp.config import get_settings  # noqa: E402
+from crawler_mcp.core.vectors.statistics import StatisticsCollector  # noqa: E402
 
 
 def extract_base_url(full_url: str) -> str:
@@ -42,16 +42,15 @@ def extract_base_url(full_url: str) -> str:
             path_parts = [part for part in parsed.path.split("/") if part]
             if path_parts:
                 # For common cases, include more meaningful path segments
-                if len(path_parts) >= 1:
-                    if parsed.netloc == "github.com" and len(path_parts) >= 2:
-                        # For GitHub, include user/repo
-                        base += f"/{path_parts[0]}/{path_parts[1]}"
-                    elif parsed.netloc.startswith("docs.") and len(path_parts) >= 1:
-                        # For docs sites, include version or main path
-                        base += f"/{path_parts[0]}"
-                    else:
-                        # General case: include first path segment
-                        base += f"/{path_parts[0]}"
+                if parsed.netloc == "github.com" and len(path_parts) >= 2:
+                    # For GitHub, include user/repo
+                    base += f"/{path_parts[0]}/{path_parts[1]}"
+                elif parsed.netloc.startswith("docs.") and len(path_parts) >= 1:
+                    # For docs sites, include version or main path
+                    base += f"/{path_parts[0]}"
+                else:
+                    # General case: include first path segment
+                    base += f"/{path_parts[0]}"
 
         return base
     except Exception:

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Any
 
@@ -61,7 +61,7 @@ class QdrantConnectionPool:
         # Synchronization
         self._lock = asyncio.Lock()
         self._initialized = False
-        self._health_check_task: asyncio.Task | None = None
+        self._health_check_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         """Initialize the connection pool."""
@@ -159,10 +159,8 @@ class QdrantConnectionPool:
                 del self.connection_health[old_conn]
 
             # Try to close old connection
-            try:
+            with suppress(Exception):
                 await old_conn.close()
-            except Exception:
-                pass  # Ignore close errors
 
             # Create new connection
             new_conn = await self._create_client()
@@ -215,7 +213,7 @@ class QdrantConnectionPool:
                 else:
                     raise RuntimeError(
                         "Failed to acquire connection from pool after retries"
-                    )
+                    ) from None
 
             except UnexpectedResponse:
                 # Qdrant error - recycle the connection
@@ -252,10 +250,8 @@ class QdrantConnectionPool:
         # Cancel health check task
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
 
         # Close all connections
         for conn in self.connections:

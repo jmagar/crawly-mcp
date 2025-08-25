@@ -5,6 +5,8 @@ This module maintains the original API while enabling access to the new modular 
 Import patterns should work exactly as before for existing code.
 """
 
+from typing import Any
+
 # Main service class - primary API entry point
 # Core processing components for advanced usage
 from .chunking import (
@@ -96,7 +98,7 @@ def get_available_chunking_strategies() -> list[str]:
     ]
 
 
-def create_chunking_strategy(strategy_name: str, **kwargs) -> ChunkingStrategy:
+def create_chunking_strategy(strategy_name: str, **kwargs: Any) -> ChunkingStrategy:
     """
     Factory function to create chunking strategies by name.
 

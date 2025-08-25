@@ -3,9 +3,10 @@ Streaming utilities for processing large datasets efficiently.
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any, TypeVar
+from typing import Any, Generic, TypeVar
 
 from ..config import settings
 from ..models.rag import DocumentChunk
@@ -49,7 +50,7 @@ class ChunkStream:
 
         # Control
         self._processing = False
-        self._processor_task: asyncio.Task | None = None
+        self._processor_task: asyncio.Task[None] | None = None
 
     async def start_processing(
         self,
@@ -182,10 +183,8 @@ class ChunkStream:
 
         if self._processor_task:
             self._processor_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._processor_task
-            except asyncio.CancelledError:
-                pass
 
     def get_stats(self) -> dict[str, Any]:
         """Get stream statistics."""
@@ -198,7 +197,7 @@ class ChunkStream:
         }
 
 
-class AsyncBatchIterator:
+class AsyncBatchIterator(Generic[T]):
     """
     Async iterator that yields items in batches.
     """
@@ -293,7 +292,7 @@ async def stream_process_chunks(
             texts = [chunk.content for chunk in batch]
 
             # Generate embeddings
-            embeddings = await embed_func(texts)
+            embeddings = embed_func(texts)
 
             # Validate embedding/batch length matching
             if not isinstance(embeddings, list) or len(embeddings) != len(batch):
@@ -307,7 +306,7 @@ async def stream_process_chunks(
                 chunk.embedding = embedding
 
             # Store chunks
-            stored = await store_func(batch)
+            stored = store_func(batch)
             total_processed += stored
 
             # Report progress
@@ -367,7 +366,7 @@ async def parallel_stream_process(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Filter out errors
-    processed = []
+    processed: list[DocumentChunk] = []
     for result in results:
         if isinstance(result, Exception):
             logger.error(f"Chunk processing error: {result}")

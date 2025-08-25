@@ -72,13 +72,13 @@ class TokenCounter:
     _tokenizer_lock: threading.Lock = threading.Lock()
     _tokenizer_initialized: bool = False
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Use configurable word_to_token_ratio from settings with fallback
         try:
             configured_ratio = getattr(
                 settings, "word_to_token_ratio", QWEN3_WORD_TO_TOKEN_RATIO
             )
-            if isinstance(configured_ratio, (int, float)) and configured_ratio > 0:
+            if isinstance(configured_ratio, int | float) and configured_ratio > 0:
                 self.word_to_token_ratio = configured_ratio
             else:
                 logger.warning(
@@ -99,7 +99,7 @@ class TokenCounter:
         self.tokenizer_type = TokenCounter._tokenizer_type
 
     @classmethod
-    def _ensure_tokenizer_initialized(cls):
+    def _ensure_tokenizer_initialized(cls) -> None:
         """Initialize tokenizer once per class, thread-safe."""
         if cls._tokenizer_initialized:
             return
@@ -472,13 +472,11 @@ class TokenBasedChunker(ChunkingStrategy):
             # Use configurable word-to-token ratio for accuracy
             approx_tokens_per_word = self.token_counter.word_to_token_ratio
             # Ensure at least one word per chunk and valid overlap relation
-            chunk_size_words = max(
-                1, int(round(self.chunk_size / approx_tokens_per_word))
-            )
+            chunk_size_words = max(1, round(self.chunk_size / approx_tokens_per_word))
             overlap_words = max(
                 0,
                 min(
-                    int(round(self.overlap / approx_tokens_per_word)),
+                    round(self.overlap / approx_tokens_per_word),
                     chunk_size_words - 1,
                 ),
             )

@@ -24,7 +24,7 @@ class EmbeddingCache:
     """Caching layer for embedding operations."""
 
     def __init__(self, max_size: int = 10000):
-        self.cache = {}
+        self.cache: dict[str, list[float]] = {}
         self.cache_hits = 0
         self.cache_misses = 0
         self.max_size = max_size
@@ -127,7 +127,7 @@ class EmbeddingWorker:
             import hashlib
 
             cached_embeddings = []
-            uncached_texts = []
+            uncached_texts: list[str] = []
             text_hashes = []
 
             for text in texts:
@@ -228,10 +228,10 @@ class EmbeddingWorker:
 class EmbeddingPipeline:
     """High-performance embedding generation pipeline."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.embedding_service = None
         self.vector_service = None
-        self.workers = []
+        self.workers: list[Any] = []
         self.cache = EmbeddingCache(max_size=1000)  # Default cache size
         self.batch_size = settings.tei_batch_size
         self.max_workers = settings.embedding_workers
@@ -395,7 +395,7 @@ class EmbeddingPipeline:
         batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
         # Flatten results
-        all_embeddings = []
+        all_embeddings: list[list[float] | None] = []
         for i, result in enumerate(batch_results):
             if isinstance(result, Exception):
                 logger.error(f"Batch processing failed: {result}")
@@ -467,7 +467,9 @@ class EmbeddingPipeline:
         storage_completed = 0
         total_chunks = len(document_chunks)
 
-        async def embedding_worker(batch_id: int, chunk_batch: list[DocumentChunk]):
+        async def embedding_worker(
+            batch_id: int, chunk_batch: list[DocumentChunk]
+        ) -> None:
             """Worker to generate embeddings for a batch of chunks."""
             async with embedding_semaphore:
                 try:
@@ -496,7 +498,7 @@ class EmbeddingPipeline:
                     # Still queue for storage with empty embeddings to maintain progress
                     await storage_queue.put((batch_id, chunk_batch))
 
-        async def storage_worker():
+        async def storage_worker() -> None:
             """Worker to store embedded chunks as they become available."""
             while True:
                 batch_id, chunk_batch = await storage_queue.get()

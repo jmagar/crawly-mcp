@@ -149,7 +149,7 @@ class SimilarityDetector:
         if magnitude1 == 0 or magnitude2 == 0:
             return 1.0 if magnitude1 == magnitude2 else 0.0
 
-        return dot_product / (magnitude1 * magnitude2)
+        return float(dot_product) / (magnitude1 * magnitude2)
 
     def calculate_levenshtein_similarity(self, text1: str, text2: str) -> float:
         """
@@ -191,8 +191,8 @@ class SimilarityDetector:
         return 1.0 - (distance / max_len)
 
     def detect_near_duplicates(
-        self, new_chunks: list[DocumentChunk], existing_chunks: list[dict]
-    ) -> list[tuple[DocumentChunk, dict, float]]:
+        self, new_chunks: list[DocumentChunk], existing_chunks: list[dict[str, Any]]
+    ) -> list[tuple[DocumentChunk, dict[str, Any], float]]:
         """
         Detect near-duplicate content between new and existing chunks.
 
@@ -251,11 +251,13 @@ class DeduplicationManager(ABC):
     def __init__(self, similarity_threshold: float = 0.95):
         self.hasher = ContentHasher()
         self.similarity_detector = SimilarityDetector(similarity_threshold)
-        self.hash_cache = {}
+        self.hash_cache: dict[str, str] = {}
         self.similarity_threshold = similarity_threshold
 
     async def deduplicate_chunks(
-        self, chunks: list[DocumentChunk], existing_chunks: list[dict] | None = None
+        self,
+        chunks: list[DocumentChunk],
+        existing_chunks: list[dict[str, Any]] | None = None,
     ) -> tuple[list[DocumentChunk], list[DocumentChunk]]:
         """
         Deduplicate chunks against existing content.
@@ -590,7 +592,7 @@ class VectorDeduplicationManager(DeduplicationManager):
     to perform deduplication operations against a vector database.
     """
 
-    def __init__(self, vector_service=None, similarity_threshold: float = 0.95):
+    def __init__(self, vector_service: Any = None, similarity_threshold: float = 0.95):
         """
         Initialize VectorDeduplicationManager.
 
@@ -658,7 +660,7 @@ class VectorDeduplicationManager(DeduplicationManager):
         try:
             # Simple heuristic: chunks are considered orphaned if they're very old
             # In a more sophisticated implementation, we'd compare against current content
-            orphaned_ids = []
+            orphaned_ids: list[str] = []
 
             # For now, return empty list (no orphaned chunks detected)
             # This can be enhanced later with timestamp-based logic or content comparison
@@ -692,7 +694,7 @@ class VectorDeduplicationManager(DeduplicationManager):
             )
 
             logger.info(f"Successfully deleted {deleted_count} orphaned chunks")
-            return deleted_count
+            return int(deleted_count)
 
         except Exception as e:
             logger.error(f"Error cleaning up orphaned chunks: {e}")

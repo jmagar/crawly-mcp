@@ -157,7 +157,7 @@ class QueryCache:
 class ServiceMetrics:
     """Tracks service-level metrics and performance."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.query_count = 0
         self.cache_hits = 0
         self.cache_misses = 0
@@ -166,7 +166,9 @@ class ServiceMetrics:
         self.embedding_errors = 0
         self.vector_errors = 0
 
-    def record_query(self, cache_hit: bool, query_time: float, reranked: bool = False):
+    def record_query(
+        self, cache_hit: bool, query_time: float, reranked: bool = False
+    ) -> None:
         """Record query metrics."""
         self.query_count += 1
         self.total_query_time += query_time
@@ -179,11 +181,11 @@ class ServiceMetrics:
         if reranked:
             self.rerank_count += 1
 
-    def record_embedding_error(self):
+    def record_embedding_error(self) -> None:
         """Record embedding service error."""
         self.embedding_errors += 1
 
-    def record_vector_error(self):
+    def record_vector_error(self) -> None:
         """Record vector service error."""
         self.vector_errors += 1
 
@@ -486,7 +488,7 @@ class RagService:
 
     async def process_crawl_result(
         self,
-        crawl_result,
+        crawl_result: Any,
         deduplication: bool | None = None,
         force_update: bool = False,
         progress_callback: Callable[..., None] | None = None,
@@ -508,7 +510,12 @@ class RagService:
             Processing statistics
         """
         return await self.processing_pipeline.process_crawl_result(
-            crawl_result, deduplication, force_update, progress_callback, seed_url, crawl_session_id
+            crawl_result,
+            deduplication,
+            force_update,
+            progress_callback,
+            seed_url,
+            crawl_session_id,
         )
 
     async def query(self, query: RagQuery, rerank: bool = True) -> RagResult:

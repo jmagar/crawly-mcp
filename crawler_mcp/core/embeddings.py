@@ -4,6 +4,7 @@ Service for generating embeddings using HF Text Embeddings Inference (TEI).
 
 import logging
 import time
+from collections.abc import Generator
 from typing import Any
 
 import httpx
@@ -46,7 +47,9 @@ class EmbeddingService:
         """Close the HTTP client."""
         await self.client.aclose()
 
-    def _chunked(self, iterable: list, size: int):
+    def _chunked(
+        self, iterable: list[Any], size: int
+    ) -> Generator[list[Any], None, None]:
         """Yield successive chunks from the iterable."""
         for i in range(0, len(iterable), size):
             yield iterable[i : i + size]

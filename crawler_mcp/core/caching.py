@@ -3,6 +3,7 @@ Advanced caching implementations with TTL and LRU eviction policies.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 from collections import OrderedDict
@@ -40,7 +41,7 @@ class TTLCache(Generic[T]):
         # Use OrderedDict for LRU behavior
         self.cache: OrderedDict[str, tuple[T, datetime]] = OrderedDict()
         self._lock = asyncio.Lock()
-        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         # Statistics
         self.hits = 0
@@ -60,10 +61,8 @@ class TTLCache(Generic[T]):
         """Stop the cleanup task."""
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
             self._cleanup_task = None
             logger.debug("Stopped TTL cache cleanup task")
 

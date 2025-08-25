@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 class ProgressTracker:
     """Advanced progress tracking for long-running operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.current_stage = "initialization"
-        self.progress_data = {}
+        self.progress_data: dict[str, Any] = {}
         self.start_time = None
-        self.stage_start_times = {}
+        self.stage_start_times: dict[str, float] = {}
 
     def start_stage(self, stage_name: str, total_items: int) -> None:
         """
@@ -128,7 +128,7 @@ class ProgressTracker:
 class WorkflowManager:
     """Manages complex RAG workflow execution."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.pipeline = ProcessingPipeline()
         self.progress_tracker = ProgressTracker()
 
@@ -190,12 +190,13 @@ class WorkflowManager:
         from ...models.crawl import CrawlResult, CrawlStatistics, CrawlStatus
 
         mini_crawl_result = CrawlResult(
+            request_id="mini-crawl",
             status=CrawlStatus.COMPLETED,
+            urls=[],
             pages=new_pages,
             statistics=CrawlStatistics(
-                pages_crawled=len(new_pages),
-                total_time=0.0,
-                success_rate=1.0,
+                total_pages_crawled=len(new_pages),
+                crawl_duration_seconds=0.0,
             ),
         )
 
@@ -285,7 +286,7 @@ class WorkflowManager:
 class ProcessingPipeline:
     """Main RAG processing pipeline coordinator."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.chunker = AdaptiveChunker(
             chunk_size=settings.chunk_size,
             overlap=settings.chunk_overlap,
@@ -745,7 +746,7 @@ class ProcessingPipeline:
         total_pages: int,
         total_chunks: int,
         processing_time: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Calculate comprehensive processing statistics.

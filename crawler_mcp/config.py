@@ -322,89 +322,10 @@ class CrawlerrSettings(BaseSettings):
         description="Use LXMLWebScrapingStrategy for 20x faster parsing",
     )
 
-    # URL Pattern Exclusions - Comprehensive filtering to avoid non-HTML content
+    # URL Pattern Exclusions - Disabled to restore original crawling behavior
     crawl_exclude_url_patterns: list[str] = Field(
         default=[
-            # Authentication/Admin pages
-            "*login.php*",
-            "*admin.php*",
-            "*login*",
-            "*admin*",
-            # Archives & Downloads
-            "*.zip",
-            "*.tar",
-            "*.gz",
-            "*.rar",
-            "*.7z",
-            # Documents
-            "*.pdf",
-            "*.doc",
-            "*.docx",
-            "*.xls",
-            "*.xlsx",
-            "*.ppt",
-            "*.pptx",
-            # Images (comprehensive)
-            "*.jpg",
-            "*.jpeg",
-            "*.png",
-            "*.gif",
-            "*.svg",
-            "*.webp",
-            "*.ico",
-            "*.bmp",
-            "*.tiff",
-            # Media files
-            "*.mp3",
-            "*.mp4",
-            "*.avi",
-            "*.mov",
-            "*.wmv",
-            "*.flv",
-            "*.wav",
-            "*.m4v",
-            # Executables & Installers
-            "*.exe",
-            "*.msi",
-            "*.app",
-            "*.deb",
-            "*.rpm",
-            "*.dmg",
-            # Web fonts
-            "*.woff",
-            "*.woff2",
-            "*.ttf",
-            "*.eot",
-            "*.otf",
-            # Data/Config files
-            "*.json",
-            "*.xml",
-            "*.csv",
-            "*.sql",
-            "*.yaml",
-            "*.yml",
-            # Stylesheets and scripts (usually not content)
-            "*.css",
-            "*.js",
-            "*.min.js",
-            "*.min.css",
-            # Version control
-            "*/.git/*",
-            "*/.svn/*",
-            "*/.hg/*",
-            # Common non-content patterns
-            "*/api/*",
-            "*/static/*",
-            "*/assets/*",
-            "*/_next/static/*",  # Next.js static assets
-            # External domains that should be avoided
-            "*github.com/*",  # GitHub profiles/repos
-            "*twitter.com/*",  # Social media
-            "*x.com/*",
-            "*linkedin.com/*",
-            "*facebook.com/*",
-            "*youtube.com/*",  # Video platforms
-            "*vimeo.com/*",
+            # Temporarily empty to allow maximum crawling
         ],
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
     )

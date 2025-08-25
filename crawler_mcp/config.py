@@ -330,6 +330,76 @@ class CrawlerrSettings(BaseSettings):
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
     )
 
+    # Content Filtering Configuration - Clean Markdown Generation
+    crawl_excluded_tags: list[str] = Field(
+        default=[
+            "nav",
+            "header",
+            "footer",
+            "aside",
+            "sidebar",
+            "form",
+            "button",
+            "input",
+            "select",
+            "textarea",
+        ],
+        alias="CRAWL_EXCLUDED_TAGS",
+        description="HTML tags to exclude during content extraction for cleaner markdown",
+    )
+
+    crawl_excluded_selectors: list[str] = Field(
+        default=[
+            ".copy-button",
+            ".copy-code-button",
+            "button[title*='Copy']",
+            ".tab-nav-item",
+            ".tab-switcher",
+            ".package-manager-tabs",
+            ".breadcrumb",
+            ".breadcrumbs",
+            ".social-share",
+            ".ad-banner",
+            ".sidebar",
+            ".navigation",
+            ".toc-sidebar",
+            ".doc-nav",
+            ".header-nav",
+            ".footer-nav",
+            ".pagination-nav",
+        ],
+        alias="CRAWL_EXCLUDED_SELECTORS",
+        description="CSS selectors for UI elements to exclude from content extraction",
+    )
+
+    crawl_content_selector: str | None = Field(
+        default=None,
+        alias="CRAWL_CONTENT_SELECTOR",
+        description="CSS selector to focus on main content area (e.g., '#main-content', '.doc-content')",
+    )
+
+    crawl_pruning_threshold: float = Field(
+        default=0.5,
+        alias="CRAWL_PRUNING_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+        description="Threshold for content relevance in PruningContentFilter (0.0-1.0)",
+    )
+
+    crawl_min_word_threshold: int = Field(
+        default=20,
+        alias="CRAWL_MIN_WORD_THRESHOLD",
+        ge=5,
+        le=100,
+        description="Minimum words required for content blocks to be included",
+    )
+
+    crawl_prefer_fit_markdown: bool = Field(
+        default=True,
+        alias="CRAWL_PREFER_FIT_MARKDOWN",
+        description="Prefer fit_markdown over raw_markdown for cleaner content",
+    )
+
     # Deduplication Configuration
     deduplication_enabled: bool = Field(
         default=True,

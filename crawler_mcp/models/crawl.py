@@ -71,6 +71,32 @@ class CrawlRequest(BaseModel):
     chunking_strategy: str | None = None
     chunking_options: dict[str, Any] | None = None
 
+    # Content Filtering Options
+    excluded_tags: list[str] | None = Field(
+        default=None, description="HTML tags to exclude from content extraction"
+    )
+    excluded_selectors: list[str] | None = Field(
+        default=None, description="CSS selectors to exclude from content extraction"
+    )
+    content_selector: str | None = Field(
+        default=None, description="CSS selector to focus on main content area"
+    )
+    pruning_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Content relevance threshold for filtering",
+    )
+    min_word_threshold: int | None = Field(
+        default=None,
+        ge=5,
+        le=100,
+        description="Minimum words required for content blocks",
+    )
+    prefer_fit_markdown: bool = Field(
+        default=True, description="Prefer filtered fit_markdown over raw_markdown"
+    )
+
     @field_validator("url")
     @classmethod
     def validate_urls(cls, v: str | list[str]) -> list[str]:

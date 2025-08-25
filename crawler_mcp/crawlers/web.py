@@ -236,9 +236,10 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             pages = []
 
             # Process results outside suppress_stdout context for debugging
+            prefer_fit_markdown = getattr(request, "prefer_fit_markdown", True)
             for result in successful_results:
                 self.logger.info("Processing successful result for %s", result.url)
-                page_content = self._to_page_content(result)
+                page_content = self._to_page_content(result, prefer_fit_markdown)
                 self.logger.info(
                     "Created PageContent with %s words for %s",
                     page_content.word_count,
@@ -405,7 +406,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
         return result
 
-    def _safe_get_markdown(self, result: Crawl4aiResult) -> str:
+    def _safe_get_markdown(
+        self, result: Crawl4aiResult, prefer_fit_markdown: bool = True
+    ) -> str:
         """Safely extract markdown content from crawl4ai result.
 
         Based on crawl4ai documentation, result.markdown is a MarkdownGenerationResult object
@@ -427,27 +430,51 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 )
                 return ""
 
-            # First try fit_markdown (filtered content) if available
-            if (
-                hasattr(result.markdown, "fit_markdown")
-                and result.markdown.fit_markdown
-            ):
-                content = result.markdown.fit_markdown
+            # Choose between fit_markdown and raw_markdown based on preference
+            if prefer_fit_markdown:
+                # First try fit_markdown (filtered content) if available
                 if (
-                    isinstance(content, str) and len(content) > 16
-                ):  # Avoid hash placeholders
-                    return content
+                    hasattr(result.markdown, "fit_markdown")
+                    and result.markdown.fit_markdown
+                ):
+                    content = result.markdown.fit_markdown
+                    if (
+                        isinstance(content, str) and len(content) > 16
+                    ):  # Avoid hash placeholders
+                        return content
 
-            # Fall back to raw_markdown (full content)
-            if (
-                hasattr(result.markdown, "raw_markdown")
-                and result.markdown.raw_markdown
-            ):
-                content = result.markdown.raw_markdown
+                # Fall back to raw_markdown (full content)
                 if (
-                    isinstance(content, str) and len(content) > 16
-                ):  # Avoid hash placeholders
-                    return content
+                    hasattr(result.markdown, "raw_markdown")
+                    and result.markdown.raw_markdown
+                ):
+                    content = result.markdown.raw_markdown
+                    if (
+                        isinstance(content, str) and len(content) > 16
+                    ):  # Avoid hash placeholders
+                        return content
+            else:
+                # Prefer raw_markdown first if prefer_fit_markdown is False
+                if (
+                    hasattr(result.markdown, "raw_markdown")
+                    and result.markdown.raw_markdown
+                ):
+                    content = result.markdown.raw_markdown
+                    if (
+                        isinstance(content, str) and len(content) > 16
+                    ):  # Avoid hash placeholders
+                        return content
+
+                # Fall back to fit_markdown
+                if (
+                    hasattr(result.markdown, "fit_markdown")
+                    and result.markdown.fit_markdown
+                ):
+                    content = result.markdown.fit_markdown
+                    if (
+                        isinstance(content, str) and len(content) > 16
+                    ):  # Avoid hash placeholders
+                        return content
 
             # If neither is available or they're just hash placeholders, return empty string
             return ""
@@ -463,7 +490,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             self.logger.warning(f"Failed to extract markdown content: {e}")
             return ""
 
-    def _to_page_content(self, result: Crawl4aiResult) -> PageContent:
+    def _to_page_content(
+        self, result: Crawl4aiResult, prefer_fit_markdown: bool = True
+    ) -> PageContent:
         """Converts a crawl4ai result to a PageContent object."""
         import sys
 
@@ -472,7 +501,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         result = self._sanitize_crawl_result(result)
 
         # Extract content using the _safe_get_markdown method which follows reference code pattern
-        best_content = self._safe_get_markdown(result)
+        best_content = self._safe_get_markdown(result, prefer_fit_markdown)
 
         # Calculate word count
         word_count = len(best_content.split()) if best_content.strip() else 0
@@ -552,10 +581,22 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             )
 
         # Create content filter for fit markdown generation - optimized for clean content
+        # Use request-specific settings or fall back to global config
+        pruning_threshold = (
+            request.pruning_threshold
+            if request.pruning_threshold is not None
+            else getattr(settings, "crawl_pruning_threshold", 0.5)
+        )
+        min_word_threshold = (
+            request.min_word_threshold
+            if request.min_word_threshold is not None
+            else getattr(settings, "crawl_min_word_threshold", 20)
+        )
+
         content_filter = PruningContentFilter(
-            threshold=0.48,  # Prune nodes below 48% relevance score for better quality
-            threshold_type="dynamic",  # Dynamic scoring
-            min_word_threshold=10,  # Higher threshold for quality content blocks
+            threshold=pruning_threshold,  # Use configurable threshold for relevance scoring
+            threshold_type="dynamic",  # Dynamic scoring for adaptive filtering
+            min_word_threshold=min_word_threshold,  # Configurable word threshold for content blocks
         )
 
         # Create markdown generator with content filter
@@ -595,13 +636,48 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             word_count_threshold=getattr(settings, "crawl_min_words", 50),
             check_robots_txt=False,  # per user preference
             verbose=False,  # Disable verbose output for MCP compatibility
-            # Optimize for clean markdown extraction - ensure content processing
-            excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
+            # Optimize for clean markdown extraction - use configurable tag exclusions
+            excluded_tags=(
+                request.excluded_tags
+                if request.excluded_tags is not None
+                else getattr(
+                    settings,
+                    "crawl_excluded_tags",
+                    ["nav", "footer", "header", "aside", "script", "style"],
+                )
+            ),
             exclude_external_links=True,
             markdown_generator=markdown_generator,  # Enable fit markdown generation
             # Force content processing for streaming
             process_iframes=False,  # Disable for performance
         )
+
+        # Add CSS selector filtering if available in Crawl4AI
+        # Note: These parameters may need to be added at extraction time depending on Crawl4AI version
+        try:
+            # Content selector to focus on main content area
+            content_selector = (
+                request.content_selector
+                if request.content_selector is not None
+                else getattr(settings, "crawl_content_selector", None)
+            )
+            if content_selector:
+                run_config.css_selector = content_selector  # type: ignore[attr-defined]
+
+            # Excluded selectors for UI noise removal
+            excluded_selectors = (
+                request.excluded_selectors
+                if request.excluded_selectors is not None
+                else getattr(settings, "crawl_excluded_selectors", [])
+            )
+            if excluded_selectors:
+                run_config.excluded_selector = ",".join(excluded_selectors)  # type: ignore[attr-defined]
+
+        except Exception as e:
+            self.logger.debug(
+                f"CSS selector configuration not supported in this Crawl4AI version: {e}"
+            )
+            # Continue without CSS selector filtering - tag filtering will still work
 
         # Optional: memory thresholds to align with our MemoryManager
         if hasattr(settings, "crawl_memory_threshold_percent"):

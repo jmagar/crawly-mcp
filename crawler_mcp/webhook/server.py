@@ -402,6 +402,70 @@ async def get_stats():
     )
 
 
+@app.post("/manual")
+async def manual_extraction(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Manually trigger extraction for a specific PR.
+
+    Expected JSON payload:
+    {
+        "owner": "github-username",
+        "repo": "repository-name",
+        "pr_number": 123
+    }
+    """
+    try:
+        # Parse JSON payload
+        try:
+            payload = await request.json()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from e
+
+        # Validate required fields
+        owner = payload.get("owner")
+        repo_name = payload.get("repo")
+        pr_number = payload.get("pr_number")
+
+        if not all([owner, repo_name, pr_number]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: owner, repo, pr_number",
+            )
+
+        # Validate pr_number is an integer
+        try:
+            pr_number = int(pr_number)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(
+                status_code=400, detail="pr_number must be an integer"
+            ) from e
+
+        # Construct repo full name
+        repo = f"{owner}/{repo_name}"
+
+        logger.info(f"Manual extraction requested for {repo}#{pr_number}")
+
+        # Queue the extraction
+        await processor.queue_extraction(repo, pr_number, "manual")
+
+        return JSONResponse(
+            {
+                "status": "queued",
+                "repo": repo,
+                "pr_number": pr_number,
+                "message": f"Extraction queued for {repo}#{pr_number}",
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error handling manual extraction: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -414,6 +478,7 @@ async def root():
                 "webhook": "/webhook",
                 "health": "/health",
                 "stats": "/stats",
+                "manual": "/manual (POST)",
             },
         }
     )

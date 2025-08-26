@@ -133,6 +133,40 @@ The webhook server exposes these endpoints:
 ### `POST /webhook`
 Main webhook endpoint that GitHub calls. Handles signature verification and event processing.
 
+### `POST /manual`
+Manually trigger extraction for a specific PR:
+```bash
+# Using curl
+curl -X POST http://localhost:38080/manual \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "jmagar", "repo": "crawler-mcp", "pr_number": 10}'
+
+# Using the CLI script
+python scripts/manual_extraction.py jmagar crawler-mcp 10
+
+# With custom webhook URL
+python scripts/manual_extraction.py jmagar crawler-mcp 10 --url https://githook.tootie.tv
+```
+
+Expected JSON payload:
+```json
+{
+  "owner": "github-username",
+  "repo": "repository-name",
+  "pr_number": 123
+}
+```
+
+Response:
+```json
+{
+  "status": "queued",
+  "repo": "owner/repo",
+  "pr_number": 123,
+  "message": "Extraction queued for owner/repo#123"
+}
+```
+
 ### `GET /health`
 Health check endpoint:
 ```json

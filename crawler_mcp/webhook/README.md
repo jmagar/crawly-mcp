@@ -133,6 +133,96 @@ The webhook server exposes these endpoints:
 ### `POST /webhook`
 Main webhook endpoint that GitHub calls. Handles signature verification and event processing.
 
+### `GET /recent`
+Get recent PRs from all accessible repositories:
+```bash
+# Get PRs from last 7 days (default)
+curl http://localhost:38080/recent
+
+# Get PRs from last 14 days
+curl "http://localhost:38080/recent?days=14"
+
+# Using the CLI script to list only
+python scripts/batch_extraction.py --list-only --days 7
+```
+
+Response:
+```json
+{
+  "recent_prs": [
+    {
+      "repo": "owner/repo",
+      "pr_number": 123,
+      "title": "Add new feature",
+      "state": "open",
+      "updated_at": "2025-01-25T10:30:00Z",
+      "url": "https://github.com/owner/repo/pull/123"
+    }
+  ],
+  "total_prs": 1,
+  "days_back": 7,
+  "message": "Found 1 PRs updated in the last 7 days"
+}
+```
+
+### `POST /batch`
+Trigger batch extraction for multiple PRs:
+```bash
+# Auto-discover and process recent PRs
+curl -X POST http://localhost:38080/batch \
+  -H "Content-Type: application/json" \
+  -d '{"auto_discover": true, "days": 7}'
+
+# Process specific PRs
+curl -X POST http://localhost:38080/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prs": [
+      {"owner": "jmagar", "repo": "crawler-mcp", "pr_number": 10},
+      {"owner": "jmagar", "repo": "docker-mcp", "pr_number": 5}
+    ]
+  }'
+
+# Using the CLI script for auto-discovery
+python scripts/batch_extraction.py --auto-discover --days 7
+
+# With custom webhook URL
+python scripts/batch_extraction.py --auto-discover --url https://githook.tootie.tv
+```
+
+Expected JSON payload (auto-discovery):
+```json
+{
+  "auto_discover": true,
+  "days": 7
+}
+```
+
+Expected JSON payload (specific PRs):
+```json
+{
+  "prs": [
+    {"owner": "user", "repo": "repo1", "pr_number": 123},
+    {"owner": "user", "repo": "repo2", "pr_number": 456}
+  ]
+}
+```
+
+Response:
+```json
+{
+  "status": "batch_queued",
+  "total_prs": 2,
+  "successfully_queued": 2,
+  "failed": 0,
+  "tasks": [
+    {"repo": "user/repo1", "pr_number": 123, "status": "queued"},
+    {"repo": "user/repo2", "pr_number": 456, "status": "queued"}
+  ],
+  "message": "Queued extraction for 2 PRs"
+}
+```
+
 ### `POST /manual`
 Manually trigger extraction for a specific PR:
 ```bash

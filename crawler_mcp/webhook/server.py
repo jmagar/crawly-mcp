@@ -11,10 +11,11 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -402,6 +403,215 @@ async def get_stats():
     )
 
 
+async def get_recent_prs_for_user(
+    github_token: str, days: int = 7
+) -> list[dict[str, Any]]:
+    """Get recent PRs from all accessible repositories."""
+    headers = {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    recent_prs = []
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat() + "Z"
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # Get all repositories the user has access to
+            repos_response = await client.get(
+                "https://api.github.com/user/repos",
+                headers=headers,
+                params={"per_page": 100, "sort": "updated", "direction": "desc"},
+            )
+            repos_response.raise_for_status()
+            repos = repos_response.json()
+
+            for repo in repos:
+                repo_name = repo["full_name"]
+
+                try:
+                    # Get recent PRs for this repo
+                    prs_response = await client.get(
+                        f"https://api.github.com/repos/{repo_name}/pulls",
+                        headers=headers,
+                        params={
+                            "state": "all",
+                            "sort": "updated",
+                            "direction": "desc",
+                            "per_page": 5,
+                        },
+                    )
+                    prs_response.raise_for_status()
+                    prs = prs_response.json()
+
+                    # Filter PRs by date and add to results
+                    for pr in prs:
+                        updated_at = datetime.fromisoformat(
+                            pr["updated_at"].replace("Z", "+00:00")
+                        )
+                        if updated_at >= datetime.fromisoformat(
+                            since.replace("Z", "+00:00")
+                        ):
+                            recent_prs.append(
+                                {
+                                    "repo": repo_name,
+                                    "pr_number": pr["number"],
+                                    "title": pr["title"],
+                                    "state": pr["state"],
+                                    "updated_at": pr["updated_at"],
+                                    "url": pr["html_url"],
+                                }
+                            )
+
+                except httpx.HTTPStatusError as e:
+                    logger.warning(f"Could not fetch PRs for {repo_name}: {e}")
+                    continue
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to fetch repositories: {e}")
+            raise HTTPException(
+                status_code=500, detail="Failed to fetch repositories"
+            ) from e
+
+    # Sort by updated date descending
+    recent_prs.sort(key=lambda x: x["updated_at"], reverse=True)
+    return recent_prs
+
+
+@app.get("/recent")
+async def get_recent_prs(days: int = 7):
+    """Get recent PRs from all accessible repositories.
+
+    Query parameters:
+    - days: Number of days to look back (default: 7)
+    """
+    try:
+        if not config.github_token:
+            raise HTTPException(status_code=500, detail="GitHub token not configured")
+
+        recent_prs = await get_recent_prs_for_user(config.github_token, days)
+
+        return JSONResponse(
+            {
+                "recent_prs": recent_prs,
+                "total_prs": len(recent_prs),
+                "days_back": days,
+                "message": f"Found {len(recent_prs)} PRs updated in the last {days} days",
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching recent PRs: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
+@app.post("/batch")
+async def batch_extraction(
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """Trigger batch extraction for multiple PRs.
+
+    Expected JSON payload:
+    {
+        "prs": [
+            {"owner": "user", "repo": "repo1", "pr_number": 123},
+            {"owner": "user", "repo": "repo2", "pr_number": 456}
+        ],
+        "auto_discover": false,  // Optional: auto-discover recent PRs
+        "days": 7               // Optional: days to look back for auto-discover
+    }
+    """
+    try:
+        # Parse JSON payload
+        try:
+            payload = await request.json()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail="Invalid JSON") from e
+
+        prs_to_process = []
+
+        # Check if auto-discovery is requested
+        if payload.get("auto_discover", False):
+            if not config.github_token:
+                raise HTTPException(
+                    status_code=500,
+                    detail="GitHub token not configured for auto-discovery",
+                )
+
+            days = payload.get("days", 7)
+            recent_prs = await get_recent_prs_for_user(config.github_token, days)
+
+            for pr in recent_prs:
+                owner, repo_name = pr["repo"].split("/", 1)
+                prs_to_process.append(
+                    {"owner": owner, "repo": repo_name, "pr_number": pr["pr_number"]}
+                )
+        else:
+            # Use provided PR list
+            prs_list = payload.get("prs", [])
+            if not prs_list:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Either provide 'prs' list or set 'auto_discover': true",
+                )
+
+            # Validate each PR entry
+            for pr in prs_list:
+                if not all(key in pr for key in ["owner", "repo", "pr_number"]):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Each PR must have 'owner', 'repo', and 'pr_number'",
+                    )
+                prs_to_process.append(pr)
+
+        # Queue all extractions
+        queued_tasks = []
+        for pr in prs_to_process:
+            try:
+                pr_number = int(pr["pr_number"])
+                repo = f"{pr['owner']}/{pr['repo']}"
+
+                await processor.queue_extraction(repo, pr_number, "batch")
+                queued_tasks.append(
+                    {"repo": repo, "pr_number": pr_number, "status": "queued"}
+                )
+
+                logger.info(f"Batch extraction queued for {repo}#{pr_number}")
+
+            except (TypeError, ValueError) as e:
+                logger.warning(f"Invalid PR number for {pr}: {e}")
+                queued_tasks.append(
+                    {
+                        "repo": f"{pr['owner']}/{pr['repo']}",
+                        "pr_number": pr["pr_number"],
+                        "status": "error",
+                        "error": "Invalid PR number",
+                    }
+                )
+
+        return JSONResponse(
+            {
+                "status": "batch_queued",
+                "total_prs": len(prs_to_process),
+                "successfully_queued": sum(
+                    1 for task in queued_tasks if task["status"] == "queued"
+                ),
+                "failed": sum(1 for task in queued_tasks if task["status"] == "error"),
+                "tasks": queued_tasks,
+                "message": f"Queued extraction for {len(queued_tasks)} PRs",
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error handling batch extraction: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
 @app.post("/manual")
 async def manual_extraction(
     request: Request,
@@ -478,6 +688,8 @@ async def root():
                 "webhook": "/webhook",
                 "health": "/health",
                 "stats": "/stats",
+                "recent": "/recent (GET)",
+                "batch": "/batch (POST)",
                 "manual": "/manual (POST)",
             },
         }

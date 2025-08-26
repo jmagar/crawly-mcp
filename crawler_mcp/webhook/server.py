@@ -242,8 +242,9 @@ class WebhookProcessor:
 
             owner, name = repo.split("/")
 
-            # Prepare command
-            cmd = ["python", self.config.script_path, owner, name, str(pr_number)]
+            # Prepare command (resolve script path to absolute)
+            script_path = str(Path(self.config.script_path).resolve())
+            cmd = ["python", script_path, owner, name, str(pr_number)]
 
             # Set environment variables for subprocess
             env = os.environ.copy()

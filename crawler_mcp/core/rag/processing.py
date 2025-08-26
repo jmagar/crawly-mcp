@@ -9,7 +9,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from ...config import settings
 from ...core.vectors import VectorService
@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 class ProgressTracker:
     """Advanced progress tracking for long-running operations."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.current_stage = "initialization"
-        self.progress_data = {}
-        self.start_time = None
-        self.stage_start_times = {}
+        self.progress_data: dict[str, Any] = {}
+        self.start_time: float | None = None
+        self.stage_start_times: dict[str, float] = {}
 
     def start_stage(self, stage_name: str, total_items: int) -> None:
         """
@@ -40,7 +40,7 @@ class ProgressTracker:
             total_items: Total number of items to process in this stage
         """
         self.current_stage = stage_name
-        self.stage_start_times[stage_name] = time.time()
+        self.stage_start_times[stage_name] = time.monotonic()
         self.progress_data[stage_name] = {
             "total_items": total_items,
             "completed_items": 0,
@@ -49,7 +49,7 @@ class ProgressTracker:
         }
 
         if self.start_time is None:
-            self.start_time = time.time()
+            self.start_time = time.monotonic()
 
         logger.info(f"Started stage '{stage_name}' with {total_items} items")
 
@@ -82,7 +82,7 @@ class ProgressTracker:
         """
         if stage_name in self.progress_data:
             self.progress_data[stage_name]["status"] = "completed"
-            self.progress_data[stage_name]["end_time"] = time.time()
+            self.progress_data[stage_name]["end_time"] = time.monotonic()
 
             duration = (
                 self.progress_data[stage_name]["end_time"]
@@ -98,7 +98,7 @@ class ProgressTracker:
         Returns:
             Dictionary with overall progress information
         """
-        total_elapsed = time.time() - self.start_time if self.start_time else 0
+        total_elapsed = time.monotonic() - self.start_time if self.start_time else 0
 
         return {
             "current_stage": self.current_stage,
@@ -128,8 +128,8 @@ class ProgressTracker:
 class WorkflowManager:
     """Manages complex RAG workflow execution."""
 
-    def __init__(self):
-        self.pipeline = ProcessingPipeline()
+    def __init__(self, pipeline: Optional["ProcessingPipeline"] = None) -> None:
+        self.pipeline = pipeline if pipeline is not None else ProcessingPipeline()
         self.progress_tracker = ProgressTracker()
 
     async def execute_full_pipeline(
@@ -190,12 +190,13 @@ class WorkflowManager:
         from ...models.crawl import CrawlResult, CrawlStatistics, CrawlStatus
 
         mini_crawl_result = CrawlResult(
+            request_id="mini-crawl",
             status=CrawlStatus.COMPLETED,
+            urls=[],
             pages=new_pages,
             statistics=CrawlStatistics(
-                pages_crawled=len(new_pages),
-                total_time=0.0,
-                success_rate=1.0,
+                total_pages_crawled=len(new_pages),
+                crawl_duration_seconds=0.0,
             ),
         )
 
@@ -207,6 +208,17 @@ class WorkflowManager:
         )
 
         self.progress_tracker.complete_stage("incremental_update")
+
+        # Calculate actual processing duration
+        stage_data = self.progress_tracker.progress_data.get("incremental_update", {})
+        start_time = stage_data.get("start_time", 0)
+        end_time = stage_data.get("end_time", time.monotonic())
+        actual_duration = end_time - start_time
+
+        # Update result with actual processing time
+        if isinstance(result, dict) and "statistics" in result:
+            result["statistics"]["processing_duration_seconds"] = actual_duration
+
         return result
 
     async def execute_reprocessing(
@@ -285,7 +297,7 @@ class WorkflowManager:
 class ProcessingPipeline:
     """Main RAG processing pipeline coordinator."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.chunker = AdaptiveChunker(
             chunk_size=settings.chunk_size,
             overlap=settings.chunk_overlap,
@@ -604,7 +616,7 @@ class ProcessingPipeline:
             )
 
         try:
-            embedding_start_time = time.time()
+            embedding_start_time = time.monotonic()
 
             # Process chunks with embeddings
             await self.embedding_pipeline.process_chunks_parallel(
@@ -612,7 +624,7 @@ class ProcessingPipeline:
             )
             total_embeddings = len(document_chunks)
 
-            embedding_duration = time.time() - embedding_start_time
+            embedding_duration = time.monotonic() - embedding_start_time
             logger.info(
                 f"Generated {total_embeddings} embeddings in {embedding_duration:.2f}s - "
                 f"{total_embeddings / embedding_duration:.1f} embeddings/sec"
@@ -631,9 +643,9 @@ class ProcessingPipeline:
             )
 
         try:
-            storage_start_time = time.time()
+            storage_start_time = time.monotonic()
             stored_count = await self.vector_service.upsert_documents(document_chunks)
-            storage_duration = time.time() - storage_start_time
+            storage_duration = time.monotonic() - storage_start_time
             logger.info(
                 f"Stored {stored_count} document chunks in vector database in {storage_duration:.2f}s"
             )
@@ -745,7 +757,7 @@ class ProcessingPipeline:
         total_pages: int,
         total_chunks: int,
         processing_time: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Calculate comprehensive processing statistics.

@@ -64,7 +64,7 @@ class CircuitBreaker:
         self.total_successes = 0
         self.circuit_opens = 0
 
-    def call(self, func: Callable) -> Any:
+    def call(self, func: Callable[..., Any]) -> Any:
         """Execute function with circuit breaker protection."""
         # Disallow in running event loop to prevent RuntimeError
         try:
@@ -77,7 +77,7 @@ class CircuitBreaker:
                 f"Circuit breaker '{self.name}': call() cannot be used in an active event loop; use 'await async_call(...)' instead"
             )
 
-    async def async_call(self, func: Callable) -> Any:
+    async def async_call(self, func: Callable[..., Any]) -> Any:
         """Execute async function with circuit breaker protection."""
         self.total_calls += 1
 
@@ -167,7 +167,7 @@ def exponential_backoff(
     exponential_base: float | None = None,
     jitter: bool = True,
     exceptions: tuple[type[Exception], ...] | None = None,
-):
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator for exponential backoff retry logic.
 
@@ -188,7 +188,7 @@ def exponential_backoff(
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
-        async def async_wrapper(*args, **kwargs) -> T:
+        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
             last_exception = None
 
             for attempt in range(max_retries):
@@ -225,7 +225,7 @@ def exponential_backoff(
             raise RuntimeError(f"Unexpected retry logic error in {func.__name__}")
 
         @functools.wraps(func)
-        def sync_wrapper(*args, **kwargs) -> T:
+        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
             last_exception = None
 
             for attempt in range(max_retries):

@@ -223,7 +223,7 @@ class SearchEngine(BaseVectorService):
         return matches
 
     async def search_with_reranking(
-        self, query_vector: list[float], rerank_threshold: float = 0.8, **kwargs
+        self, query_vector: list[float], rerank_threshold: float = 0.8, **kwargs: Any
     ) -> list[SearchMatch]:
         """
         Perform search with optional result reranking.

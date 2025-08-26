@@ -7,6 +7,7 @@ Configurable for different hardware setups and environments.
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from ..config import settings
@@ -177,7 +178,7 @@ class HighPerformanceBrowserPool:
             self.logger.error(f"Failed to return browser to pool: {e}")
 
     @contextlib.asynccontextmanager
-    async def lease(self):
+    async def lease(self) -> AsyncGenerator[Any, None]:
         """Context manager for safe browser acquisition and release."""
         browser = None
         try:

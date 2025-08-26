@@ -1,5 +1,5 @@
 """
-Configuration management for Crawlerr using Pydantic Settings.
+Configuration management for Crawler-MCP using Pydantic Settings.
 """
 
 import logging
@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 RERANKER_MODEL_ERROR = "RERANKER_MODEL must be a non-empty string"
 
 
-class CrawlerrSettings(BaseSettings):
+class CrawlerMCPSettings(BaseSettings):
     """
     Application settings loaded from environment variables and .env files.
     """
@@ -224,7 +224,7 @@ class CrawlerrSettings(BaseSettings):
     crawl_extract_media: bool = Field(default=False, alias="CRAWL_EXTRACT_MEDIA")
     crawl_knowledge_graph: bool = Field(default=False, alias="CRAWL_KNOWLEDGE_GRAPH")
     crawl_user_agent: str = Field(
-        default="Crawlerr/0.1.0 (+https://github.com/user/crawlerr)",
+        default="Crawler-MCP/0.1.0 (+https://github.com/user/crawler-mcp)",
         alias="CRAWL_USER_AGENT",
     )
 
@@ -638,7 +638,7 @@ class CrawlerrSettings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _validate_chunking(self) -> "CrawlerrSettings":
+    def _validate_chunking(self) -> "CrawlerMCPSettings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("CHUNK_OVERLAP must be less than CHUNK_SIZE")
         if self.chunk_size > self.embedding_max_length:
@@ -646,7 +646,7 @@ class CrawlerrSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_tei_batch_size(self) -> "CrawlerrSettings":
+    def _validate_tei_batch_size(self) -> "CrawlerMCPSettings":
         """Validate TEI batch size against token limits."""
         estimated_tokens = self.tei_batch_size * self.tei_tokens_per_item
         if estimated_tokens > self.tei_max_batch_tokens:
@@ -668,7 +668,7 @@ class CrawlerrSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_deduplication(self) -> "CrawlerrSettings":
+    def _validate_deduplication(self) -> "CrawlerMCPSettings":
         """Validate deduplication configuration."""
         valid_strategies = {"content_hash", "timestamp", "none"}
         if self.deduplication_strategy not in valid_strategies:
@@ -689,14 +689,17 @@ class CrawlerrSettings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _populate_excluded_selectors(self) -> "CrawlerrSettings":
+    def _populate_excluded_selectors(self) -> "CrawlerMCPSettings":
         """Populate crawl_excluded_selectors from property if it's empty."""
         if not self.crawl_excluded_selectors:
             self.crawl_excluded_selectors = self.crawl_excluded_selectors_list
         return self
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(
+            Path(__file__).parent.parent / ".env",  # Project root .env
+            ".env",  # Current directory .env as fallback
+        ),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # Ignore deprecated settings for backward compatibility
@@ -704,13 +707,13 @@ class CrawlerrSettings(BaseSettings):
 
 
 # Lazy settings accessor (avoids import-time side effects)
-_settings: CrawlerrSettings | None = None
+_settings: CrawlerMCPSettings | None = None
 
 
-def get_settings() -> CrawlerrSettings:
+def get_settings() -> CrawlerMCPSettings:
     global _settings
     if _settings is None:
-        _settings = CrawlerrSettings()
+        _settings = CrawlerMCPSettings()
     return _settings
 
 

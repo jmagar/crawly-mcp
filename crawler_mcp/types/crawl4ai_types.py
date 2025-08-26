@@ -256,6 +256,11 @@ class CrawlerRunConfigAdvanced(Protocol):
 # Runtime import helpers for type-safe access to crawl4ai
 # These functions provide type-safe wrappers around dynamic imports
 
+# Initialize variables that will be set based on import success
+DefaultMarkdownGeneratorImpl: type[DefaultMarkdownGenerator] | None
+PruningContentFilterImpl: type[PruningContentFilter] | None
+MarkdownGenerationResultImpl: type[MarkdownGenerationResult] | None
+
 # For actual runtime usage, we just cast the imports to our protocols
 # This maintains type safety while allowing runtime flexibility
 try:
@@ -270,19 +275,15 @@ try:
     )
 
     # Type-safe aliases that satisfy our protocols
-    DefaultMarkdownGeneratorImpl: type[DefaultMarkdownGenerator] = (
-        _DefaultMarkdownGenerator
-    )
-    PruningContentFilterImpl: type[PruningContentFilter] = _PruningContentFilter
-    MarkdownGenerationResultImpl: type[MarkdownGenerationResult] = (
-        _MarkdownGenerationResult
-    )
+    DefaultMarkdownGeneratorImpl = _DefaultMarkdownGenerator
+    PruningContentFilterImpl = _PruningContentFilter
+    MarkdownGenerationResultImpl = _MarkdownGenerationResult
 
 except ImportError:
     # Fallback for when crawl4ai is not available
-    DefaultMarkdownGeneratorImpl: type[DefaultMarkdownGenerator] | None = None  # type: ignore[assignment]
-    PruningContentFilterImpl: type[PruningContentFilter] | None = None  # type: ignore[assignment]
-    MarkdownGenerationResultImpl: type[MarkdownGenerationResult] | None = None  # type: ignore[assignment]
+    DefaultMarkdownGeneratorImpl = None  # type: ignore[assignment]
+    PruningContentFilterImpl = None  # type: ignore[assignment]
+    MarkdownGenerationResultImpl = None  # type: ignore[assignment]
 
 
 # Type aliases for cleaner imports

@@ -4,7 +4,8 @@ Service for generating embeddings using HF Text Embeddings Inference (TEI).
 
 import logging
 import time
-from typing import Any
+from collections.abc import Iterator, Sequence
+from typing import Any, TypeVar
 
 import httpx
 from fastmcp.exceptions import ToolError
@@ -14,6 +15,8 @@ from ..models.rag import EmbeddingResult
 from .resilience import exponential_backoff
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class EmbeddingService:
@@ -46,10 +49,13 @@ class EmbeddingService:
         """Close the HTTP client."""
         await self.client.aclose()
 
-    def _chunked(self, iterable: list, size: int):
+    def _chunked(self, iterable: Sequence["T"], size: int) -> Iterator[list["T"]]:
         """Yield successive chunks from the iterable."""
+        if size <= 0:
+            raise ValueError("size must be > 0")
         for i in range(0, len(iterable), size):
-            yield iterable[i : i + size]
+            # always return list chunks for a consistent downstream type
+            yield list(iterable[i : i + size])
 
     async def _ensure_client_open(self) -> None:
         """Ensure the HTTP client is open and recreate if closed."""

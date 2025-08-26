@@ -2,6 +2,7 @@
 Base class for vector service modules providing shared functionality.
 """
 
+import contextlib
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -110,8 +111,6 @@ class BaseVectorService:
         """Close the Qdrant client."""
         # Only close if we own the client and it's not from pool
         if self.client and self._owned_client:
-            try:
+            with contextlib.suppress(Exception):
                 await self.client.close()
-            except Exception:
-                pass  # Ignore close errors
         self.client = None
